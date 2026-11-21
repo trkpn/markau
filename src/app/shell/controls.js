@@ -324,6 +324,8 @@ function initVoiceSelector() {
   }
 
   const retry = async () => {
+    // The counter lives in the poll alone — a gesture retry is free.
+    retries += 1;
     if (await applyVoices(await getAvailableVoices())) {
       stopRetrying();
     } else if (retries >= 30) {

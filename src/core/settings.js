@@ -264,7 +264,11 @@ export function sanitizeSettings(raw) {
       FONT_SIZE_OPTIONS.map((s) => s.id),
       d.fontSize
     ),
-    lineHeight: oneOf(source.lineHeight, LINE_HEIGHT_OPTIONS, d.lineHeight),
+    lineHeight: oneOf(
+      source.lineHeight,
+      LINE_HEIGHT_OPTIONS.map((o) => o.value),
+      d.lineHeight
+    ),
     autoStopOnReplace: bool(source.autoStopOnReplace, d.autoStopOnReplace),
     pauseOtherTabs: bool(source.pauseOtherTabs, d.pauseOtherTabs),
     smoothScrollActive: bool(source.smoothScrollActive, d.smoothScrollActive),

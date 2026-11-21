@@ -179,10 +179,25 @@ describe('saveSettings', () => {
     expect(JSON.parse(localStorage.getItem(KEY)).theme).toBe('light');
   });
 
+  it('persists a line height choice', () => {
+    saveSettings({ lineHeight: '1.5' });
+    expect(getSettings().lineHeight).toBe('1.5');
+    expect(JSON.parse(localStorage.getItem(KEY)).lineHeight).toBe('1.5');
+
+    saveSettings({ lineHeight: '2.0' });
+    expect(loadSettings().lineHeight).toBe('2.0');
+  });
+
   it('falls back to the default for an invalid value', () => {
     saveSettings({ theme: 'light' });
     saveSettings({ theme: 'nonsense' });
     expect(getSettings().theme).toBe(DEFAULT_SETTINGS.theme);
+  });
+
+  it('falls back to the default line height for an invalid value', () => {
+    saveSettings({ lineHeight: '1.5' });
+    saveSettings({ lineHeight: '3.25' });
+    expect(getSettings().lineHeight).toBe(DEFAULT_SETTINGS.lineHeight);
   });
 });
 
