@@ -364,6 +364,84 @@ describe('a translation of many parts', () => {
   });
 });
 
+describe('when the translator smuggles a separator into a unit', () => {
+  /**
+   * A translator that answers with every unit it was given — with a piece
+   * of its own smuggled in at the end of each answer.
+   * @param {(unit: string) => string} inject what is added to the answer
+   * @returns {typeof fetch}
+   */
+  function smugglingTranslator(inject) {
+    return async (input, init) => {
+      const url = String(typeof input === 'string' ? input : input?.url);
+
+      if (url.includes('/api/translate')) {
+        const body = JSON.parse(init.body);
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            detected: 'en',
+            results: body.units.map((unit) => `TH<${unit}>${inject(unit)}`)
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+
+      return new Response(JSON.stringify({ sentences: [{ trans: 'TH<direct>' }], src: 'en' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
+    };
+  }
+
+  beforeEach(() => {
+    storage.clear();
+    initTranslate();
+  });
+
+  it('falls back to the original when a pipe is smuggled into a unit', async () => {
+    // The pipe of a table row is structure: it is lifted off before the
+    // translation and put back on its own. A pipe that comes back inside a
+    // unit of plain prose was never in the original — it is a separator the
+    // translator smuggled in, and the unit cannot be trusted. The lazy
+    // path has refused such an answer all along; the one-pass path now
+    // refuses it as well, so a unit that was fine before may be kept as it
+    // was — that is the stricter integrity, and it is wanted.
+    const original = 'A paragraph of words that is worth keeping as it is.';
+    el.editor.value = original;
+    el.editor.dispatchEvent(new Event('input', { bubbles: true }));
+    el.editor.setSelectionRange(0, 0);
+
+    globalThis.fetch = smugglingTranslator(() => ' | smuggled');
+
+    const finished = await runTranslation();
+
+    expect(finished).toBe(true);
+
+    // The unit fell back to the original: the smuggled pipe is nowhere in
+    // the document, and neither is the answer that carried it.
+    expect(el.editor.value).not.toContain('|');
+    expect(el.editor.value).not.toContain('TH<');
+    expect(el.editor.value).toContain(original);
+  });
+
+  it('keeps the shape of the document when a line break is smuggled into a unit', async () => {
+    // A newline inside a unit would move every following anchor of the
+    // document. The answer is made one line again before it is put back —
+    // the smuggled break never becomes a line of the document.
+    const original = 'A paragraph of words that is worth keeping as it is.';
+    el.editor.value = original;
+    el.editor.dispatchEvent(new Event('input', { bubbles: true }));
+    el.editor.setSelectionRange(0, 0);
+
+    globalThis.fetch = smugglingTranslator(() => '\nsmuggled line');
+
+    await runTranslation();
+
+    expect(el.editor.value.split('\n').length).toBe(1);
+  });
+});
+
 describe('when the translator refuses', () => {
   it('tries again instead of giving up at once', async () => {
     // A refusal is not a failure of the document — it is the translator

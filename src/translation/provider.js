@@ -17,6 +17,7 @@
  */
 
 import { TARGET_LANGUAGES } from './languages.js';
+import { abortError } from '../core/schedule.js';
 
 /** The address of the translator. */
 export const TRANSLATE_ENDPOINT = 'https://translate.googleapis.com/translate_a/single';
@@ -68,15 +69,6 @@ export const SEPARATOR = '⟦§⟧';
  * language the user can choose is a language the translator accepts.
  */
 const TARGET_CODES = new Set(TARGET_LANGUAGES.map((language) => language.code));
-
-/**
- * Tells whether a code names a language the app can translate into.
- * @param {string} code
- * @returns {boolean}
- */
-export function isTargetLanguage(code) {
-  return TARGET_CODES.has(String(code || '').trim());
-}
 
 /**
  * An error that carries the status the client should see.
@@ -183,9 +175,7 @@ async function translateWithClient(
   const url = buildTranslateUrl(text, target, client);
 
   if (signal?.aborted) {
-    const aborted = new Error('The work was stopped.');
-    aborted.name = 'AbortError';
-    throw aborted;
+    throw abortError();
   }
 
   const controller = new AbortController();
@@ -207,9 +197,7 @@ async function translateWithClient(
     });
   } catch (err) {
     if (signal?.aborted) {
-      const aborted = new Error('The work was stopped.');
-      aborted.name = 'AbortError';
-      throw aborted;
+      throw abortError();
     }
     if (err && err.name === 'AbortError') {
       throw new TranslateError('The translator took too long to answer.', 504);
@@ -457,9 +445,7 @@ export async function translateUnits(
   }
 
   if (signal?.aborted) {
-    const error = new Error('The work was stopped.');
-    error.name = 'AbortError';
-    throw error;
+    throw abortError();
   }
 
   const groups = groupUnits(units);
@@ -472,15 +458,13 @@ export async function translateUnits(
 
   for (let index = 0; index < groups.length; index += 1) {
     if (signal?.aborted) {
-      const error = new Error('The work was stopped.');
-      error.name = 'AbortError';
-      throw error;
+      throw abortError();
     }
 
     const group = groups[index];
     const joined = group.map((piece) => piece.text).join(` ${SEPARATOR} `);
 
-    const answer = await translateWithRetry(joined, target, fetchImpl, signal);
+    const answer = await translateText(joined, target, { fetchImpl, signal });
     const split = splitUnits(answer.text, group.length);
 
     if (!split) {
@@ -488,7 +472,7 @@ export async function translateUnits(
       // asked for on its own, which is slower but keeps them in their
       // places.
       for (const piece of group) {
-        const single = await translateWithRetry(piece.text, target, fetchImpl, signal);
+        const single = await translateText(piece.text, target, { fetchImpl, signal });
         appendAnswer(answers, piece.unit, single.text);
         if (!detected) detected = single.detected;
       }
@@ -523,23 +507,6 @@ export async function translateUnits(
 function appendAnswer(answers, unit, text) {
   const existing = answers.get(unit);
   answers.set(unit, existing === undefined ? text : `${existing} ${text}`);
-}
-
-/**
- * Asks the translator for a piece of text.
- *
- * The clients are tried one after another inside `translateText`, so
- * there is nothing left to try again here: a refusal that survived every
- * client is not going to pass by itself, and asking again only makes it
- * worse.
- *
- * @param {string} text
- * @param {string} target
- * @param {typeof fetch} fetchImpl
- * @returns {Promise<{ text: string, detected: string }>}
- */
-async function translateWithRetry(text, target, fetchImpl, signal) {
-  return translateText(text, target, { fetchImpl, signal });
 }
 
 /**

@@ -96,9 +96,8 @@ describe('buildChunks', () => {
     expect(buildChunks('', 'en-US')).toEqual([]);
   });
 
-  it('falls back to a single chunk when segmentation produces nothing', () => {
+  it('returns an empty list for whitespace-only text', () => {
     saveSettings({ speechChunk: 'sentence' });
-    const chunks = buildChunks('   ', 'en-US');
-    expect(chunks.length).toBeGreaterThanOrEqual(0);
+    expect(buildChunks('   ', 'en-US')).toEqual([]);
   });
 });

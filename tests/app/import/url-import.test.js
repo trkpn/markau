@@ -5,12 +5,90 @@
  * page into Markdown that keeps the things a reader needs: the headings,
  * the links, the code, the tables — and none of the navigation.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+// The bytes are the subject of the binary tests, not the reader of PDFs —
+// the parser stands in, so a test can tell the bytes arrived without
+// loading a real one.
+vi.mock('@/importers/pdf.js', () => ({
+  pdfToMarkdown: vi.fn(async () => ({
+    markdown: 'The words of the bytes.',
+    title: 'Paper of the Origin',
+    pages: 1
+  })),
+  buildPdfDocument: (pdf) => pdf.markdown,
+  fromBase64: () => new Uint8Array()
+}));
 
 const { detectSource, normalizeUrl, decodeBase64Utf8, SOURCE } =
   await import('@/app/import/sources.js');
 const { htmlToMarkdown, resolveUrl } = await import('@/importers/html.js');
-const { buildDocument, isTextual, stripReaderHeader } = await import('@/app/import/url-import.js');
+const { buildDocument, importFromUrl, isTextual, stripReaderHeader } = await import(
+  '@/app/import/url-import.js'
+);
+
+/**
+ * The error the browser hands back when a fetch is stopped midway.
+ */
+function abortError() {
+  const err = new Error('This operation was aborted');
+  err.name = 'AbortError';
+  return err;
+}
+
+/**
+ * An answer of the origin, as the fetch of a browser would hand it over.
+ *
+ * @param {string} body the text of the answer
+ * @param {object} [details] what else the answer carries
+ * @param {string} [details.contentType] the kind of the answer
+ * @param {string} [details.url] the address the answer came from
+ * @returns {object} a stand-in for a Response
+ */
+function originResponse(body, { contentType = 'text/html; charset=utf-8', url } = {}) {
+  return {
+    ok: true,
+    status: 200,
+    url,
+    headers: { get: (name) => (name === 'content-type' ? contentType : null) },
+    text: async () => body
+  };
+}
+
+/**
+ * Stands in for the network. By default the origin refuses a direct read
+ * and the proxy refuses everything; each test can answer for either leg
+ * instead.
+ *
+ * @param {object} [answers] what the two legs of the ladder answer
+ * @param {(address: string) => object|Error|Promise<object|Error>} [answers.origin]
+ *   what the origin answers — an object is served, an error is thrown
+ * @param {(address: string) => object|Promise<object>} [answers.proxy] the payload of the proxy
+ * @returns {{ direct: string[], proxy: string[] }} the addresses each leg saw
+ */
+function mockFetch({ origin, proxy } = {}) {
+  const seen = { direct: [], proxy: [] };
+
+  globalThis.fetch = async (url) => {
+    const address = String(url);
+
+    if (address.startsWith('/api/fetch')) {
+      seen.proxy.push(address);
+      const payload = proxy
+        ? await proxy(address)
+        : { ok: false, error: 'The proxy could not fetch that page.' };
+      return { ok: true, status: 200, json: async () => payload };
+    }
+
+    seen.direct.push(address);
+    const answer = origin ? await origin(address) : null;
+    if (answer instanceof Error) throw answer;
+    if (answer) return answer;
+    throw new TypeError('Failed to fetch');
+  };
+
+  return seen;
+}
 
 describe('reading an address', () => {
   it('accepts an address without a scheme', () => {
@@ -321,5 +399,217 @@ describe('turning a page into Markdown', () => {
     const rows = markdown.split('\n').filter((line) => line.trim().startsWith('|'));
     expect(rows).toHaveLength(3);
     expect(rows[2]).toBe('| Written by | First Second |');
+  });
+});
+
+describe('cancelling an import', () => {
+  it('does not ask the proxy for an import that was stopped', async () => {
+    const seen = mockFetch({
+      origin: () => abortError(),
+      proxy: () => ({
+        ok: true,
+        status: 200,
+        finalUrl: 'https://example.com/notes/readme.md',
+        contentType: 'text/plain',
+        body: '# The answer of the proxy'
+      })
+    });
+
+    const error = await importFromUrl('https://example.com/notes/readme.md').then(
+      () => null,
+      (err) => err
+    );
+
+    // A cancelled import is not an error to fall back from: the call stops
+    // with the abort itself, and the proxy never hears of the address.
+    expect(error?.name).toBe('AbortError');
+    expect(seen.proxy).toHaveLength(0);
+  });
+});
+
+describe('falling back to the proxy', () => {
+  const articlePage = `
+    <!doctype html>
+    <html>
+      <head><title>The Article of the Proxy</title></head>
+      <body>
+        <main>
+          <article>
+            <h1>The Article of the Proxy</h1>
+            <p>This is the opening paragraph of the article, and it is long enough for the
+               reader to consider it a real piece of writing rather than the empty shell
+               of a page that draws itself with a script of its own.</p>
+            <p>A second paragraph carries the words that only a proper answer would hold,
+               so the test can tell that the words of the page were served and turned
+               into a document for the reader who asked for them.</p>
+            <p>A third paragraph rounds the article out, so the reader finds a piece of
+               writing with a body worth the name and not a fragment of one.</p>
+          </article>
+        </main>
+      </body>
+    </html>
+  `;
+
+  it('serves a Markdown file straight from the origin', async () => {
+    const seen = mockFetch({
+      origin: () =>
+        originResponse('# The Notes of the Origin\n\nThe words of the file.', {
+          contentType: 'text/plain',
+          url: 'https://example.com/notes/readme.md'
+        })
+    });
+
+    const result = await importFromUrl('https://example.com/notes/readme.md');
+
+    expect(seen.direct).toHaveLength(1);
+    expect(seen.proxy).toHaveLength(0);
+    expect(result.markdown).toContain('words of the file');
+    expect(result.note).toBe('Markdown file');
+  });
+
+  it('reads a Markdown file through the proxy when the origin refuses', async () => {
+    const seen = mockFetch({
+      proxy: () => ({
+        ok: true,
+        status: 200,
+        finalUrl: 'https://example.com/notes/readme.md',
+        contentType: 'text/plain',
+        body: '# The Proxied Notes\n\nThe words that came through the proxy.'
+      })
+    });
+
+    const result = await importFromUrl('https://example.com/notes/readme.md');
+
+    expect(seen.direct).toHaveLength(1);
+    expect(seen.proxy).toHaveLength(1);
+    expect(result.markdown).toContain('words that came through the proxy');
+    expect(result.note).toBe('Markdown file');
+  });
+
+  it('serves a page straight from the origin', async () => {
+    const seen = mockFetch({
+      origin: () => originResponse(articlePage, { url: 'https://example.com/some/article' })
+    });
+
+    const result = await importFromUrl('https://example.com/some/article');
+
+    expect(seen.proxy).toHaveLength(0);
+    expect(result.markdown).toContain('The Article of the Proxy');
+    expect(result.note).toBe('article');
+  });
+
+  it('serves a file of bytes straight from the origin', async () => {
+    const seen = mockFetch({
+      origin: () => ({
+        ok: true,
+        status: 200,
+        url: 'https://example.com/files/paper.pdf',
+        headers: { get: (name) => (name === 'content-type' ? 'application/pdf' : null) },
+        // No stream on the stand-in, so the bytes arrive as one buffer.
+        arrayBuffer: async () => new TextEncoder().encode('%PDF bytes of the origin').buffer
+      })
+    });
+
+    const result = await importFromUrl('https://example.com/files/paper.pdf');
+
+    expect(seen.direct).toHaveLength(1);
+    expect(seen.proxy).toHaveLength(0);
+    expect(result.markdown).toContain('words of the bytes');
+    expect(result.note).toBe('PDF (1 pages)');
+  });
+
+  it('reads a page through the proxy when the origin refuses', async () => {
+    const seen = mockFetch({
+      proxy: () => ({
+        ok: true,
+        status: 200,
+        finalUrl: 'https://example.com/some/article',
+        contentType: 'text/html; charset=utf-8',
+        body: articlePage
+      })
+    });
+
+    const result = await importFromUrl('https://example.com/some/article');
+
+    expect(seen.direct).toHaveLength(1);
+    expect(seen.proxy).toHaveLength(1);
+    expect(result.markdown).toContain('The Article of the Proxy');
+    expect(result.note).toBe('article (via the proxy)');
+  });
+
+  it('does not ask the proxy again for an answer that is not a page of text', async () => {
+    const seen = mockFetch({
+      origin: () => originResponse('%PDF- not really a page', { contentType: 'application/pdf' })
+    });
+
+    // A post of Substack goes straight through the ladder: nothing of the
+    // app may follow a definitive answer of the origin.
+    const error = await importFromUrl('https://blog.example.substack.com/p/some-post').then(
+      () => null,
+      (err) => err
+    );
+
+    expect(seen.direct).toHaveLength(1);
+    expect(seen.proxy).toHaveLength(0);
+    expect(error?.message).toBe('That address is not a page of text.');
+  });
+
+  it('reads the JSON of a Reddit thread through the proxy', async () => {
+    const thread = [
+      {
+        data: {
+          children: [
+            {
+              kind: 't3',
+              data: {
+                title: 'The Post of the Thread',
+                subreddit: 'programming',
+                author: 'someone',
+                score: 42,
+                created_utc: 1730000000,
+                is_self: true,
+                selftext:
+                  'The body of the post, long enough to stand as a document on its own once the thread is built and shown to the reader who asked for it.',
+                permalink: '/r/programming/comments/abc123/a_post/'
+              }
+            }
+          ]
+        }
+      }
+    ];
+
+    const seen = mockFetch({
+      proxy: () => ({
+        ok: true,
+        status: 200,
+        finalUrl: 'https://www.reddit.com/r/programming/comments/abc123/a_post/.json',
+        contentType: 'application/json',
+        body: JSON.stringify(thread)
+      })
+    });
+
+    const result = await importFromUrl(
+      'https://www.reddit.com/r/programming/comments/abc123/a_post/'
+    );
+
+    expect(seen.direct).toHaveLength(1);
+    expect(seen.proxy).toHaveLength(1);
+    expect(result.markdown).toContain('# The Post of the Thread');
+    expect(result.note).toBe('thread');
+  });
+
+  it('reports a refusal of the proxy as the answer of the address', async () => {
+    const seen = mockFetch({
+      proxy: () => ({ ok: true, status: 404, finalUrl: 'https://example.com/files/paper.pdf' })
+    });
+
+    const error = await importFromUrl('https://example.com/files/paper.pdf').then(
+      () => null,
+      (err) => err
+    );
+
+    expect(seen.direct).toHaveLength(1);
+    expect(seen.proxy).toHaveLength(1);
+    expect(error?.message).toBe('That address answered 404.');
   });
 });

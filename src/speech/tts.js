@@ -45,8 +45,6 @@ let chunkQueue = [];
 let chunkCursor = 0;
 /** Index of the first chunk that has not finished yet. */
 let chunkDone = 0;
-/** The delayed restart after a chunk failed. */
-let chunkTimer = null;
 /** The next hand-over to the engine, outside its own event handlers. */
 let pumpTimer = null;
 /** Every utterance handed to the engine that has not finished yet. */
@@ -78,12 +76,8 @@ let windowStartBlock = 0;
 let windowEndBlock = -1;
 /** Whether blocks remain outside the current window. */
 let hasMoreSpeech = false;
-/** Whether the current token table covers the whole document. */
-let tokensCoverDocument = false;
 /** A cheap approximation of the whole document's word count. */
 let estimatedTotalWords = 0;
-/** The DOM walk behind the estimate, made once per document change. */
-let cachedWordEstimate = 0;
 /** The estimate supplied by the preview, from the Markdown source. */
 let documentWordEstimate = 0;
 
@@ -105,10 +99,8 @@ let lastAutoScrollAt = 0;
 const stateListeners = new Set();
 
 // Playback health tracking
-/** When the engine last showed a sign of life (start or word boundary). */
+/** When the engine last showed a sign of life (start, boundary or end). */
 let lastProgressAt = 0;
-/** When the engine last fired an event of its own (start, boundary or end). */
-let lastEventAt = 0;
 let restartAttempts = 0;
 
 /* ==========================================================================
@@ -275,7 +267,6 @@ export function setScrollContainer(el) {
  */
 export function setPreviewContainer(el) {
   previewContainerRef = el || null;
-  cachedWordEstimate = 0;
   documentWordEstimate = 0;
 }
 
@@ -543,9 +534,8 @@ const TIME_ALONE = /^\s*\[?\d{1,2}:\d{2}(?::\d{2})?\]?\s*$/;
 /**
  * Tokenizes rendered preview text into speakable words.
  *
- * A full pass is used by the explicit `ensureTokens()` API and by the tests.
- * The narrator itself passes a small list of top-level blocks so a book is
- * never walked from beginning to end before the first sentence.
+ * The narrator passes a small list of top-level blocks so a book is never
+ * walked from beginning to end before the first sentence.
  *
  * @param {HTMLElement} rootContainer
  * @param {string} locale
@@ -591,11 +581,7 @@ function tokenizeDOMForTTS(
   const targets = blocks && blocks.length > 0 ? blocks : [rootContainer];
 
   if (!append) {
-    if (!blocks) {
-      // A full pass owns the whole container and may be replacing an older
-      // full pass.
-      unwrapTokenSpans(rootContainer);
-    } else if (previousTokenized.size > 0) {
+    if (previousTokenized.size > 0) {
       previousTokenized.forEach((node) => {
         if (node?.isConnected) unwrapTokenSpans(node);
       });
@@ -766,17 +752,7 @@ function tokenizeDOMForTTS(
   }
 
   if (!append) {
-    estimatedTotalWords = blocks ? Math.max(totalWords, tokens.length) : 0;
-
-    if (!blocks) {
-      // A full pass covers every block: the start window can use it as it is.
-      tokensCoverDocument = true;
-      windowStartBlock = 0;
-      windowEndBlock = -1;
-      hasMoreSpeech = false;
-    } else {
-      tokensCoverDocument = false;
-    }
+    estimatedTotalWords = Math.max(totalWords, tokens.length);
   } else if (totalWords > 0) {
     estimatedTotalWords = Math.max(estimatedTotalWords, totalWords);
   }
@@ -814,17 +790,6 @@ function unwrapTokenSpans(root) {
   spans.forEach((span) => {
     span.replaceWith(document.createTextNode(span.textContent));
   });
-}
-
-/**
- * Re-tokenizes the preview when the token table is outdated.
- * @returns {Array} the current token list
- */
-export function ensureTokens() {
-  if (tokensAreStale && previewContainerRef) {
-    tokenizeDOMForTTS(previewContainerRef, documentLocale);
-  }
-  return tokens;
 }
 
 /**
@@ -898,24 +863,13 @@ export function hasSpeechContent() {
  *
  * The exact number is only known after the document has been tokenized. The
  * player uses this estimate so the progress bar cannot imply that the current
- * window is the whole book.
+ * window is the whole book. The preview supplies the estimate from the
+ * Markdown source, so no text of the DOM is read here at all.
  *
- * @param {HTMLElement|null} root
  * @returns {number}
  */
-function estimateWordCount(root) {
-  // The preview supplies the estimate from the Markdown source, so the first
-  // Play does not have to read the text of the whole DOM.
-  if (documentWordEstimate > 0) return documentWordEstimate;
-
-  // Reading the text of the whole preview for every window would defeat the
-  // windowing itself. The document changes only when the tokens are marked
-  // stale, so the walk is made once per version.
-  if (cachedWordEstimate > 0) return cachedWordEstimate;
-
-  const text = root?.textContent || '';
-  cachedWordEstimate = Math.max(1, Math.ceil(text.length / 6));
-  return cachedWordEstimate;
+function estimateWordCount() {
+  return documentWordEstimate;
 }
 
 /**
@@ -998,11 +952,10 @@ function resetTokenWindow(start, end) {
   windowStartBlock = Math.max(0, start);
   windowEndBlock = Math.min(speechBlocks.length, end);
   hasMoreSpeech = windowEndBlock < speechBlocks.length;
-  tokensCoverDocument = false;
 
   tokenizeDOMForTTS(previewContainerRef, documentLocale, {
     blocks: speechBlocks.slice(windowStartBlock, windowEndBlock),
-    totalWords: estimateWordCount(previewContainerRef)
+    totalWords: estimateWordCount()
   });
 }
 
@@ -1058,6 +1011,22 @@ function visibleSpeechBlockIndex() {
 }
 
 /**
+ * Whether the current token window already covers the block the reader is
+ * looking at, so it can be kept instead of being rebuilt under the audio.
+ *
+ * @param {number} index
+ * @returns {boolean}
+ */
+function windowCoversVisibleBlock(index) {
+  return (
+    !tokensAreStale &&
+    tokens.length > 0 &&
+    index >= windowStartBlock &&
+    index < windowEndBlock
+  );
+}
+
+/**
  * Starts the window at the first block the reader can see.
  *
  * A window that was prepared on idle is reused only while it still covers
@@ -1067,7 +1036,6 @@ function visibleSpeechBlockIndex() {
  */
 function ensureStartWindow() {
   if (!previewContainerRef) return false;
-  if (!tokensAreStale && tokens.length > 0 && tokensCoverDocument) return true;
 
   speechBlocks = collectSpeechBlocks(previewContainerRef);
   if (speechBlocks.length === 0) return false;
@@ -1077,7 +1045,7 @@ function ensureStartWindow() {
   // A window that still covers the visible block is valid: after a pause it
   // is the table the engine is reading, and replacing it would move the words
   // under the running audio.
-  if (!tokensAreStale && tokens.length > 0 && index >= windowStartBlock && index < windowEndBlock) {
+  if (windowCoversVisibleBlock(index)) {
     return true;
   }
 
@@ -1107,19 +1075,12 @@ export function prepareSpeechWindow() {
   speechBlocks = collectSpeechBlocks(previewContainerRef);
   if (speechBlocks.length === 0) return;
 
-  if (!tokensAreStale && tokens.length > 0 && tokensCoverDocument) return;
-
   const index = visibleSpeechBlockIndex();
 
   // Keep the existing window while it still covers the viewport: the hover
   // wrappers are already there, and re-wrapping on every small scroll would
   // only churn the DOM.
-  if (
-    !tokensAreStale &&
-    tokens.length > 0 &&
-    index >= windowStartBlock &&
-    index < windowEndBlock
-  ) {
+  if (windowCoversVisibleBlock(index)) {
     return;
   }
 
@@ -1145,7 +1106,7 @@ function extendTokenWindow() {
   tokenizeDOMForTTS(previewContainerRef, documentLocale, {
     blocks: speechBlocks.slice(start, end),
     append: true,
-    totalWords: estimateWordCount(previewContainerRef)
+    totalWords: estimateWordCount()
   });
 
   windowEndBlock = end;
@@ -1220,9 +1181,7 @@ export function markTokensStale(reason = 'content-changed') {
   windowStartBlock = 0;
   windowEndBlock = -1;
   hasMoreSpeech = false;
-  tokensCoverDocument = false;
   estimatedTotalWords = 0;
-  cachedWordEstimate = 0;
   if (isPlaying || isPaused) {
     stop(reason);
   }
@@ -1342,8 +1301,9 @@ export function wasRecentlyAutoScrolling(windowMs = 900) {
  *   1. The engine's queue is fed ahead. The next request is handed to the
  *      browser while the current one is still being spoken, so the voice
  *      does not fall silent (and go looking for the next sentence) after
- *      every pause. A request that the browser refuses is asked for again
- *      rather than abandoned.
+ *      every pause. A request that the browser refuses before it is voiced
+ *      is asked for again rather than abandoned; a chunk the listener has
+ *      already heard is never repeated — the reading skips to the next one.
  *   2. The chunks are neither too small nor too long. One sentence per
  *      request is a stall between every sentence; one request for the whole
  *      document is cut off by Chromium after about fifteen seconds. The
@@ -1438,6 +1398,11 @@ function pumpChunks(sessionId) {
 /**
  * Schedules the next hand-over outside the engine's own event handlers.
  *
+ * This is the only place a pump is ever scheduled: any pending pump —
+ * including a retry backoff still waiting — is cancelled first, so exactly
+ * one pump is pending at any time and a stale one can never fire besides
+ * the fresh one.
+ *
  * Chromium can swallow a `speak()` that is called synchronously from inside
  * `onend` (or `onstart`): the utterance is accepted and never spoken, and
  * the reading only resumes when the watchdog notices the silence. A turn of
@@ -1447,7 +1412,7 @@ function pumpChunks(sessionId) {
  * @param {number} [delay]
  */
 function schedulePump(sessionId, delay = 0) {
-  if (pumpTimer) clearTimeout(pumpTimer);
+  clearPumpSchedules();
   pumpTimer = setTimeout(() => {
     pumpTimer = null;
     pumpChunks(sessionId);
@@ -1464,7 +1429,8 @@ function schedulePump(sessionId, delay = 0) {
 function speakChunk(chunk, index, sessionId) {
   const utterance = new SpeechSynthesisUtterance(chunk.text);
   liveUtterances.add(utterance);
-  window.__currentTTSUtterance = utterance;
+  // Whether the engine actually voiced this request at least once.
+  utterance.__started = false;
 
   if (currentVoice) utterance.voice = currentVoice;
   // A voice the reader picked explicitly knows its own language; otherwise
@@ -1475,7 +1441,6 @@ function speakChunk(chunk, index, sessionId) {
 
   utterance.onboundary = (event) => {
     if (sessionId !== currentSessionId || utterance.__canceled) return;
-    lastEventAt = Date.now();
     noteProgress();
     const globalChar = chunk.charStart + event.charIndex;
     const matchedTokenIndex = findTokenByCharIndex(globalChar);
@@ -1484,11 +1449,13 @@ function speakChunk(chunk, index, sessionId) {
 
   utterance.onstart = () => {
     if (sessionId !== currentSessionId || utterance.__canceled) return;
-    lastEventAt = Date.now();
+    utterance.__started = true;
     isPlaying = true;
     isPaused = false;
     isStarting = false;
     noteProgress();
+    // Real progress: the engine voiced a chunk. The restart budget is back.
+    restartAttempts = 0;
     const active = tokens[currentWordIndex];
     if (active?.element) active.element.classList.remove('speaking-target');
 
@@ -1511,7 +1478,7 @@ function speakChunk(chunk, index, sessionId) {
 
   utterance.onresume = () => {
     if (sessionId !== currentSessionId || utterance.__canceled) return;
-    lastEventAt = Date.now();
+    noteProgress();
     isPaused = false;
     notifyState({ isPlaying: true, isPaused: false });
   };
@@ -1521,10 +1488,11 @@ function speakChunk(chunk, index, sessionId) {
     liveUtterances.delete(utterance);
     // Chunks finish in order; an `onend` from a chunk that was cancelled and
     // handed over again must not count as progress.
-    lastEventAt = Date.now();
     chunkDone = Math.max(chunkDone, index + 1);
     chunkRetries = 0;
     noteProgress();
+    // Real progress: a chunk was spoken to the end. The restart budget is back.
+    restartAttempts = 0;
 
     // Advance active word to chunk end if boundary events were omitted by the synthesizer
     const endTokenIndex = findTokenByCharIndex(chunk.charEnd);
@@ -1561,13 +1529,13 @@ function speakChunk(chunk, index, sessionId) {
       } else {
         // Interrupted during initial start/buffer drain (e.g. async cancel collision in Chromium).
         // Retry from this chunk so the reader is not stuck in a disabled "starting" state.
-        retryFromChunk(index, sessionId);
+        retryFromChunk(index, sessionId, utterance.__started);
       }
       return;
     }
 
     console.warn('SpeechSynthesisUtterance error:', event.error || 'unknown');
-    retryFromChunk(index, sessionId);
+    retryFromChunk(index, sessionId, utterance.__started);
   };
 
   if (window.speechSynthesis.paused) {
@@ -1577,22 +1545,31 @@ function speakChunk(chunk, index, sessionId) {
 }
 
 /**
- * Starts the reading again from a chunk that the engine failed on.
+ * Handles a chunk that the engine failed on.
+ *
+ * A chunk the listener has already heard is never spoken again: repeating
+ * it is audible friction, so the reading skips straight to the next chunk.
+ * A request the engine never voiced (refused before `onstart`) is asked
+ * for again — that retry is silent — and skipped once the retries run out.
  *
  * The requests already queued behind it are dropped (their `canceled`
- * events are ignored), so the failed chunk is spoken in its place and the
- * rest of the document follows.
+ * events are ignored), so the rest of the document follows in order.
  *
- * @param {number} index
+ * @param {number} index position of the failed chunk in the queue
  * @param {number} sessionId
+ * @param {boolean} [started] whether the engine had already begun voicing it
  */
-function retryFromChunk(index, sessionId) {
+function retryFromChunk(index, sessionId, started = false) {
   if (sessionId !== currentSessionId) return;
 
   chunkRetries += 1;
 
-  if (chunkRetries > CHUNK_RETRY_LIMIT) {
-    console.warn('Speech chunk skipped after', CHUNK_RETRY_LIMIT, 'retries');
+  if (started || chunkRetries > CHUNK_RETRY_LIMIT) {
+    if (started) {
+      console.warn('Speech chunk skipped: it had already been voiced once');
+    } else {
+      console.warn('Speech chunk skipped after', CHUNK_RETRY_LIMIT, 'retries');
+    }
     chunkRetries = 0;
     chunkCursor = Math.max(chunkCursor, index + 1);
     chunkDone = Math.max(chunkDone, index + 1);
@@ -1607,45 +1584,59 @@ function retryFromChunk(index, sessionId) {
   cancelEngine();
   chunkCursor = index;
   chunkDone = index;
-  clearChunkTimer();
-  chunkTimer = setTimeout(() => {
-    chunkTimer = null;
-    if (sessionId !== currentSessionId) return;
-    pumpChunks(sessionId);
-  }, ERROR_RESTART_MS * chunkRetries);
-}
-
-function clearChunkTimer() {
-  if (chunkTimer === null) return;
-  clearTimeout(chunkTimer);
-  chunkTimer = null;
-}
-
-function clearPumpTimer() {
-  if (pumpTimer === null) return;
-  clearTimeout(pumpTimer);
-  pumpTimer = null;
+  schedulePump(sessionId, ERROR_RESTART_MS * chunkRetries);
 }
 
 /**
- * Records that the engine is alive, so the watchdog does not interfere.
+ * Cancels every pending hand-over to the engine: the pump itself, a retry
+ * backoff still waiting, and the 40ms launch debounce. The pump is only
+ * ever scheduled through `schedulePump`, so exactly one is pending.
+ */
+function clearPumpSchedules() {
+  if (pumpTimer !== null) {
+    clearTimeout(pumpTimer);
+    pumpTimer = null;
+  }
+  if (speakDebounceTimer !== null) {
+    clearTimeout(speakDebounceTimer);
+    speakDebounceTimer = null;
+  }
+}
+
+/**
+ * Tears the current session's queue machinery down: every pending hand-over
+ * to the engine is cancelled, the live utterances are detached so their late
+ * events are ignored, and the chunk queue is emptied.
+ */
+function teardownSession() {
+  clearPumpSchedules();
+  cleanupUtterance();
+  chunkQueue = [];
+  chunkCursor = 0;
+  chunkDone = 0;
+  chunkRetries = 0;
+}
+
+/**
+ * Records that the engine showed a sign of life, so the watchdog does not
+ * interfere. This is the one liveness clock: every engine event and every
+ * launch feeds it.
+ *
+ * It deliberately does not reset `restartAttempts`: the watchdog's
+ * "engine reports speaking" check runs through here on every tick, and a
+ * reset from that clock check would forgive an engine that holds the queue
+ * without ever speaking forever. The restart budget is reset only on real
+ * progress — a chunk that began or finished being spoken.
  */
 function noteProgress() {
   lastProgressAt = Date.now();
-  restartAttempts = 0;
 }
 
 /**
  * Ends the narration cleanly.
  */
 function finishPlayback() {
-  cleanupUtterance();
-  clearChunkTimer();
-  clearPumpTimer();
-  chunkQueue = [];
-  chunkCursor = 0;
-  chunkDone = 0;
-  chunkRetries = 0;
+  teardownSession();
   setActiveWord(-1);
 
   // A finished session is not a prepared window any more: pressing Play
@@ -1661,15 +1652,10 @@ function finishPlayback() {
   isStarting = false;
   restartAttempts = 0;
   lastProgressAt = 0;
-  lastEventAt = 0;
   clearStartWatchdog();
   notifyState({ isPlaying: false, isPaused: false, starting: false, currentWordIndex: -1 });
 }
 
-/**
- * Starts reading from a specific word index.
- * @param {number} wordIndex
- */
 /**
  * Safely cancels the speech synthesis engine.
  * In Chromium, calling cancel() while paused does NOT purge the queued
@@ -1703,11 +1689,6 @@ function speakFromWord(wordIndex = 0) {
       return;
     }
   }
-  if (tokens.length === 0) {
-    isStarting = false;
-    notifyState({ starting: false, isPlaying: false });
-    return;
-  }
 
   const targetIndex = Math.max(0, Math.min(tokens.length - 1, wordIndex));
   const targetToken = tokens[targetIndex];
@@ -1719,22 +1700,13 @@ function speakFromWord(wordIndex = 0) {
   isStarting = true;
   notifyState({ starting: true });
 
-  cleanupUtterance();
-  clearChunkTimer();
-  clearPumpTimer();
-  chunkRetries = 0;
-  lastEventAt = Date.now();
-  lastProgressAt = Date.now();
+  teardownSession();
+  noteProgress();
   // The cross-tab hand-shake is optional.
   if (getSettings().pauseOtherTabs) announceNarrationStart();
 
   if (window.speechSynthesis.speaking || window.speechSynthesis.pending || window.speechSynthesis.paused) {
     safeCancelSpeech();
-  }
-
-  if (speakDebounceTimer) {
-    clearTimeout(speakDebounceTimer);
-    speakDebounceTimer = null;
   }
 
   setActiveWord(targetIndex);
@@ -1757,6 +1729,7 @@ function speakFromWord(wordIndex = 0) {
   const launchSpeech = () => {
     // A later click during the ~40ms buffer drain discards this launch.
     if (thisSession !== currentSessionId) return;
+    speakDebounceTimer = null;
     pumpChunks(thisSession);
     startStartWatchdog(thisSession);
   };
@@ -1783,7 +1756,7 @@ export function play() {
       // reader asked for the cross-tab hand-shake.
       if (getSettings().pauseOtherTabs) announceNarrationStart();
       api.resume();
-      lastEventAt = Date.now();
+      noteProgress();
       isPaused = false;
       isPlaying = true;
       isStarting = false;
@@ -1862,13 +1835,8 @@ function pauseForOtherTab() {
 
   // Another tab has taken over narration. Clean up our active utterances and
   // timers so this tab does not fight over the browser's audio queue or re-pump chunks.
-  cleanupUtterance();
-  clearChunkTimer();
-  clearPumpTimer();
+  teardownSession();
   clearStartWatchdog();
-  chunkQueue = [];
-  chunkCursor = 0;
-  chunkDone = 0;
 
   window.speechSynthesis.pause();
   isPaused = true;
@@ -1884,17 +1852,7 @@ export function stop(reason = 'user') {
   currentSessionId++;
   tokensAreStale = true;
   hasMoreSpeech = false;
-  if (speakDebounceTimer) {
-    clearTimeout(speakDebounceTimer);
-    speakDebounceTimer = null;
-  }
-  clearChunkTimer();
-  clearPumpTimer();
-  chunkQueue = [];
-  chunkCursor = 0;
-  chunkDone = 0;
-  chunkRetries = 0;
-  cleanupUtterance();
+  teardownSession();
   clearStartWatchdog();
   safeCancelSpeech();
   setActiveWord(-1);
@@ -1943,7 +1901,6 @@ function cleanupUtterance() {
     utterance.onerror = null;
   }
   liveUtterances.clear();
-  window.__currentTTSUtterance = null;
 }
 
 /**
@@ -2043,7 +2000,7 @@ export function reconcileWithSpeechApi() {
   // silent until the user presses Play again.
   if (api.paused && !isPaused && !document.hidden) {
     api.resume();
-    lastEventAt = Date.now();
+    noteProgress();
   }
 
   // The engine reports activity — the reading is alive, whatever the
@@ -2066,8 +2023,10 @@ export function reconcileWithSpeechApi() {
 
     // A chunk never lasts longer than the stall threshold, so an engine that
     // holds the queue without a single event is stuck, not slow. This also
-    // covers a queued request that never starts.
-    if (lastEventAt === 0 || Date.now() - lastEventAt <= STALL_MS) {
+    // covers a queued request that never starts. The clock check alone does
+    // not forgive earlier restarts: noteProgress keeps the reading alive but
+    // leaves the restart budget alone.
+    if (Date.now() - lastProgressAt <= STALL_MS) {
       noteProgress();
       return;
     }
@@ -2079,12 +2038,6 @@ export function reconcileWithSpeechApi() {
 
     restartAttempts += 1;
     speakFromWord(Math.max(0, currentWordIndex));
-    return;
-  }
-
-  // If another speech engine or tab is active while our queue is empty, do not wake MarkAu.
-  if (api.speaking && liveUtterances.size === 0 && chunkDone >= chunkQueue.length) {
-    pause();
     return;
   }
 

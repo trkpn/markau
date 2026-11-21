@@ -41,7 +41,7 @@ import {
 } from '@/speech/tts.js';
 import { setSTTLocale } from '@/speech/stt.js';
 import { getSettings, onSettingsChange } from '@/core/settings.js';
-import { lineAtOffset, onContentChange } from '@/app/editor/editor.js';
+import { lineAtOffset, lineOffsets, onContentChange } from '@/app/editor/editor.js';
 import { setMessage, clearMessage } from '@/app/shell/status.js';
 import { LARGE_DOC_CHARS, yieldToMainThread } from '@/core/schedule.js';
 
@@ -295,6 +295,16 @@ function resolveWaiters(job, all = false) {
 }
 
 /**
+ * A rough words estimate for the whole document — about six characters a
+ * word, and never fewer than one.
+ * @param {string} text
+ * @returns {number}
+ */
+function estimateWords(text) {
+  return Math.max(1, Math.ceil(text.length / 6));
+}
+
+/**
  * Renders the current document into the preview in balanced slices.
  *
  * @param {'edited'|'replaced'|'translated'} reason
@@ -342,7 +352,7 @@ function renderNow(reason, { force = false } = {}) {
   cancelRender();
   cancelSpeechPreparation();
   markTokensStale(reason);
-  setSpeechWordEstimate(Math.max(1, Math.ceil(markdownText.length / 6)));
+  setSpeechWordEstimate(estimateWords(markdownText));
 
   // The language belongs to the document, not to the last chunk of it: the
   // narrator may start as soon as the first block is on the page. A sample
@@ -460,7 +470,7 @@ function renderNow(reason, { force = false } = {}) {
     resolveWaiters(job, true);
 
     if (el.activeTokenInfo) {
-      const estimate = Math.max(1, Math.ceil(markdownText.length / 6));
+      const estimate = estimateWords(markdownText);
       el.activeTokenInfo.textContent = `~${estimate} words`;
     }
 
@@ -509,19 +519,6 @@ export function refreshPreview() {
   // A settings change is not a new document: it must not throw the reader
   // back to the top (renderNow resets the position for 'replaced').
   flushRender({ force: true, reason: 'edited' });
-}
-
-/**
- * The offsets at which each source line starts.
- * @param {string} text
- * @returns {number[]}
- */
-function sourceLineStarts(text) {
-  const starts = [0];
-  for (let index = 0; index < text.length; index += 1) {
-    if (text[index] === '\n') starts.push(index + 1);
-  }
-  return starts;
 }
 
 /**
@@ -590,7 +587,7 @@ export function patchPreviewLines(startLine, endLine) {
   }
 
   const text = el.editor.value;
-  const starts = sourceLineStarts(text);
+  const starts = lineOffsets(text);
   if (starts.length !== totalSourceLines) {
     lastRenderedText = null;
     renderCompleted = false;
@@ -679,7 +676,7 @@ export function patchPreviewLines(startLine, endLine) {
   anchorsDirty = true;
   rebuildAnchorCache();
 
-  const estimate = Math.max(1, Math.ceil(text.length / 6));
+  const estimate = estimateWords(text);
   setSpeechWordEstimate(estimate);
   if (el.activeTokenInfo) {
     el.activeTokenInfo.textContent = `~${estimate} words`;
@@ -1375,12 +1372,6 @@ export function initPreview(handlers = {}) {
   window.addEventListener('pagehide', flushPosition);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') flushPosition();
-  });
-
-  // A diagram that finished drawing adds words to the document — the word
-  // count and the narration can learn them when they are next needed.
-  el.preview.addEventListener('preview:diagram-rendered', () => {
-    // Tokenization is now windowed; nothing is precomputed while idle.
   });
 
   // Remember the reading position, and yield to the reader when they scroll

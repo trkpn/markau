@@ -124,7 +124,7 @@ function hideOverlay() {
  * @param {DataTransfer|null} dataTransfer
  * @returns {Promise<void>}
  */
-export async function handleDrop(dataTransfer) {
+async function handleDrop(dataTransfer) {
   const files = dataTransfer?.files;
 
   if (files && files.length > 0) {
@@ -162,8 +162,6 @@ export async function handleDrop(dataTransfer) {
   }
 }
 
-
-export { isDocumentFile };
 
 /**
  * True when the drag began inside the editor — a selection of the text of

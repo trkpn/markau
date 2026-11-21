@@ -103,6 +103,20 @@ export function lineAtOffset(text, offset) {
   return line;
 }
 
+/**
+ * The offsets at which each line starts — the inverse of `lineAtOffset`.
+ *
+ * @param {string} text
+ * @returns {number[]}
+ */
+export function lineOffsets(text) {
+  const starts = [0];
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '\n') starts.push(index + 1);
+  }
+  return starts;
+}
+
 /* ==========================================================================
  * Document statistics
  * ========================================================================== */
@@ -562,6 +576,7 @@ export function applyDocumentPatch(patch, reason = 'translated') {
  *   current selection
  * @returns {'replaced'|'edited'} how the mutation was classified
  */
+// test-only — no production caller; paste.test.js drives the paste pipeline through it
 export function insertText(text, { replaceDocument = false } = {}) {
   if (!text) return 'edited';
 

@@ -449,8 +449,6 @@ async function renderBlock(mermaid, block, index, theme) {
     // them, but only when nothing is being read out loud.
     if (getSettings().readDiagramLabels && !isSpeaking()) {
       refreshTokens();
-      // The word count and the narration are refreshed during idle time.
-      block.dispatchEvent(new CustomEvent('preview:diagram-rendered', { bubbles: true }));
     }
   } catch (error) {
     if (!block.isConnected) return;

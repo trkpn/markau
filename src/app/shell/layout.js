@@ -39,9 +39,6 @@ function resolveAxis(preference) {
 }
 
 /**
- * @returns {'row'|'column'} the axis currently in use
- */
-/**
  * @returns {number} the editor share of the workspace (0 – 1)
  */
 export function getRatio() {

@@ -27,7 +27,7 @@ import { el } from '@/app/shell/dom.js';
 import { setMarkdown, onContentChange } from '@/app/editor/editor.js';
 import { getSettings } from '@/core/settings.js';
 import { setMessage } from '@/app/shell/status.js';
-import { confirmDialog } from '@/app/shell/dialog.js';
+import { closeModal, confirmDialog, openModal, registerModal } from '@/app/shell/dialog.js';
 import {
   addVersion,
   changedCharacters,
@@ -85,9 +85,6 @@ let restoring = false;
  * edit of the old.
  */
 let captureIsForced = false;
-
-/** Where the focus was before the dialog opened. */
-let lastFocused = null;
 
 /* ==========================================================================
  * The capture
@@ -495,35 +492,16 @@ function saveNow() {
 export function openDialog() {
   if (!el.modalHistory) return;
 
-  lastFocused = document.activeElement;
   renderHistory();
 
-  el.modalHistory.removeAttribute('hidden');
-  el.btnHistoryClose?.focus();
+  openModal(el.modalHistory, { focusTarget: el.btnHistoryClose });
 }
 
 /**
  * Closes the version history and gives the focus back.
  */
 export function closeDialog() {
-  el.modalHistory?.setAttribute('hidden', '');
-
-  // The focus goes back where it was — unless that place is inside a
-  // dialog that has been closed since (the history opened from the
-  // preferences, for instance).
-  const target =
-    lastFocused && document.contains(lastFocused) && !lastFocused.closest('[hidden]')
-      ? lastFocused
-      : el.btnHistory;
-  lastFocused = null;
-
-  if (target && typeof target.focus === 'function') {
-    try {
-      target.focus();
-    } catch {
-      /* the element may be gone already */
-    }
-  }
+  closeModal(el.modalHistory);
 }
 
 /* ==========================================================================
@@ -544,19 +522,19 @@ export function initHistory() {
   el.btnHistorySave?.addEventListener('click', saveNow);
   el.btnHistoryClear?.addEventListener('click', clearAll);
 
-  el.modalHistory?.addEventListener('click', (event) => {
-    if (event.target === el.modalHistory) closeDialog();
-  });
-
-  window.addEventListener('keydown', (event) => {
-    if (event.key !== 'Escape') return;
-    if (!el.modalHistory || el.modalHistory.hasAttribute('hidden')) return;
-
+  // The open, the close, the backdrop click and the Escape key of the
+  // dialog belong to the shared modal choreography.
+  registerModal(el.modalHistory, {
     // A confirmation the history itself opened is on top: the Escape key
     // answers that dialog, and the history stays where it is.
-    if (document.querySelector('dialog[open]')) return;
-
-    closeDialog();
+    escapeGuard: () => Boolean(document.querySelector('dialog[open]')),
+    // The focus goes back where it was — unless that place is inside a
+    // dialog that has been closed since (the history opened from the
+    // preferences, for instance).
+    getRestoreTarget: (previousFocus) =>
+      previousFocus && document.contains(previousFocus) && !previousFocus.closest('[hidden]')
+        ? previousFocus
+        : el.btnHistory
   });
 
   // The document changes

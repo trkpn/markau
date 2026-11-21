@@ -187,13 +187,3 @@ export async function epubToMarkdown(
     chapters: written
   };
 }
-
-/**
- * Builds the document of a book.
- *
- * @param {{ markdown: string, title: string, chapters: number }} book
- * @returns {string}
- */
-export function buildEpubDocument(book) {
-  return book.markdown;
-}

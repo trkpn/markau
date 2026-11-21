@@ -17,6 +17,7 @@
  */
 
 import { el } from '@/app/shell/dom.js';
+import { isModalHandlingEscape, isModalOpen } from '@/app/shell/dialog.js';
 import { stop, isSpeaking, isNarrationStarting } from '@/speech/tts.js';
 import { applyFormat, flushDraft } from '@/app/editor/editor.js';
 import { setView } from '@/app/shell/layout.js';
@@ -80,17 +81,6 @@ function saveDocument() {
 }
 
 /**
- * @returns {boolean} whether a modal surface is currently open
- */
-function isModalOpen() {
-  if (el.modalSettings && !el.modalSettings.hasAttribute('hidden')) return true;
-  if (el.modalUrlImport && !el.modalUrlImport.hasAttribute('hidden')) return true;
-  if (el.modalTranslate && !el.modalTranslate.hasAttribute('hidden')) return true;
-  if (el.modalHistory && !el.modalHistory.hasAttribute('hidden')) return true;
-  return Boolean(document.querySelector('dialog[open]'));
-}
-
-/**
  * Handles a single key press.
  * @param {KeyboardEvent} event
  */
@@ -104,10 +94,9 @@ function onKeyDown(event) {
    * stops the narration.
    */
   if (event.key === 'Escape') {
-    if (el.modalSettings && !el.modalSettings.hasAttribute('hidden')) return; // handled by the modal
-    if (el.modalUrlImport && !el.modalUrlImport.hasAttribute('hidden')) return; // handled by the modal
-    if (el.modalTranslate && !el.modalTranslate.hasAttribute('hidden')) return; // handled by the modal
-    if (el.modalHistory && !el.modalHistory.hasAttribute('hidden')) return; // handled by the modal
+    // The modal registry knows which modal is open and handles its own
+    // Escape key — the shortcuts stay out of its way.
+    if (isModalHandlingEscape()) return;
     const pending = cancelPendingStart();
     if (isSpeaking() || isNarrationStarting() || pending) {
       event.preventDefault();

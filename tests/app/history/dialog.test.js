@@ -31,9 +31,15 @@ globalThis.localStorage = {
 };
 
 // The confirmation is the user's answer — the tests answer it themselves.
-vi.mock('@/app/shell/dialog.js', () => ({
-  confirmDialog: vi.fn(async () => true)
-}));
+// The rest of the dialog module stays real: the shared modal choreography
+// is ordinary DOM work, and it is what opens and closes this dialog.
+vi.mock('@/app/shell/dialog.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    confirmDialog: vi.fn(async () => true)
+  };
+});
 
 const MARKUP = `
   <div id="modal-history" class="modal-backdrop" hidden>

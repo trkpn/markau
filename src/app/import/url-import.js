@@ -19,8 +19,10 @@
 
 import { el } from '@/app/shell/dom.js';
 import { setMarkdown } from '@/app/editor/editor.js';
+import { parseFrontmatter } from '@/core/frontmatter.js';
 import { getSettings } from '@/core/settings.js';
 import { setMessage } from '@/app/shell/status.js';
+import { closeModal, openModal, registerModal } from '@/app/shell/dialog.js';
 import { detectSource, decodeBase64Utf8, SOURCE } from '@/app/import/sources.js';
 import {
   beginImport,
@@ -95,23 +97,56 @@ async function fetchText(url, options = {}) {
 }
 
 /**
+ * Fetches an address, first directly and then through the proxy of the app.
+ *
+ * Every kind of content travels the same road: the direct read is tried
+ * first — it is free, and nothing leaves the browser — and when the origin
+ * refuses it, the proxy of the app is asked. A cancelled import is not an
+ * error to fall back from, and an answer that is not of the wanted kind is
+ * an answer that is not worth asking for twice.
+ *
+ * @param {string} url
+ * @param {object} legs the work that differs from one kind of content to another
+ * @param {object} [legs.init] the options of the direct fetch
+ * @param {(response: Response) => Promise<object|string>} legs.direct reads the answer of the origin
+ * @param {(proxied: object) => object|string|Promise<object|string>} legs.viaProxy reads the answer of the proxy
+ * @param {(status: number) => string} legs.answered the message for an address that refused
+ * @returns {Promise<object|string>} whatever the leg that worked hands back
+ */
+async function fetchWithFallback(url, { init = {}, direct, viaProxy, answered }) {
+  try {
+    const response = await fetch(url, { signal: importSignal(), ...init });
+    if (response.ok) {
+      return await direct(response);
+    }
+  } catch (err) {
+    // The origin does not allow a direct read — the proxy will have to. But
+    // a cancelled import is not an error to fall back from, and an answer
+    // that says the content is not of the wanted kind is not worth asking
+    // the proxy for again.
+    if (err instanceof ImportError || err?.name === 'AbortError') throw err;
+  }
+
+  const proxied = await fetchViaProxy(url);
+  if (proxied.status >= 400) {
+    throw new ImportError(answered(proxied.status));
+  }
+  return viaProxy(proxied);
+}
+
+/**
  * Fetches the text of an address, first directly and then through the
  * proxy of the app.
  *
  * @param {string} url
  * @returns {Promise<string>}
  */
-async function fetchTextWithFallback(url) {
-  try {
-    return await fetchText(url);
-  } catch {
-    // The address does not allow a direct read — the proxy will have to.
-    const proxied = await fetchViaProxy(url);
-    if (proxied.status >= 400) {
-      throw new ImportError(`That address answered ${proxied.status}.`);
-    }
-    return proxied.body;
-  }
+function fetchTextWithFallback(url) {
+  return fetchWithFallback(url, {
+    direct: (response) => response.text(),
+    viaProxy: (proxied) => proxied.body,
+    answered: (status) => `That address answered ${status}.`
+  });
 }
 
 /**
@@ -142,32 +177,24 @@ export function isTextual(contentType) {
  * @param {string} url
  * @returns {Promise<{ html: string, finalUrl: string, via: string|null }>}
  */
-async function fetchHtml(url) {
-  try {
-    const response = await fetch(url, { redirect: 'follow', signal: importSignal() });
-    if (response.ok) {
+function fetchHtml(url) {
+  return fetchWithFallback(url, {
+    init: { redirect: 'follow' },
+    direct: async (response) => {
       const type = response.headers.get('content-type') || '';
       if (!isTextual(type)) {
         throw new ImportError('That address is not a page of text.');
       }
       return { html: await response.text(), finalUrl: response.url || url, via: null };
-    }
-  } catch (err) {
-    // The page does not allow a direct read — the proxy will have to. But
-    // an answer that is not text is an answer that is not worth asking for
-    // again, and a cancelled import is not an error to fall back from.
-    if (err instanceof ImportError || err?.name === 'AbortError') throw err;
-  }
-
-  const proxied = await fetchViaProxy(url);
-  if (proxied.status >= 400) {
-    throw new ImportError(`That page answered ${proxied.status}.`);
-  }
-  if (!isTextual(proxied.contentType)) {
-    throw new ImportError('That address is not a page of text.');
-  }
-
-  return { html: proxied.body, finalUrl: proxied.finalUrl || url, via: 'the proxy' };
+    },
+    viaProxy: (proxied) => {
+      if (!isTextual(proxied.contentType)) {
+        throw new ImportError('That address is not a page of text.');
+      }
+      return { html: proxied.body, finalUrl: proxied.finalUrl || url, via: 'the proxy' };
+    },
+    answered: (status) => `That page answered ${status}.`
+  });
 }
 
 /* ==========================================================================
@@ -277,26 +304,19 @@ async function fetchHuggingFaceCard(source) {
  * @param {object} source
  * @returns {Promise<{ markdown: string, title: string, sourceUrl: string, note: string }>}
  */
-async function fetchRawMarkdown(source) {
-  try {
-    const markdown = await fetchText(source.url);
-    return {
-      markdown,
-      title: fileNameOf(source.url),
-      sourceUrl: source.url,
-      note: 'Markdown file'
-    };
-  } catch (err) {
-    // The file may be on a host that does not allow a cross-origin read.
-    // The proxy can still reach it.
-    const proxied = await fetchViaProxy(source.url);
-    return {
-      markdown: proxied.body,
-      title: fileNameOf(source.url),
-      sourceUrl: source.url,
-      note: 'Markdown file'
-    };
-  }
+function fetchRawMarkdown(source) {
+  const documentOf = (markdown) => ({
+    markdown,
+    title: fileNameOf(source.url),
+    sourceUrl: source.url,
+    note: 'Markdown file'
+  });
+
+  return fetchWithFallback(source.url, {
+    direct: async (response) => documentOf(await response.text()),
+    viaProxy: (proxied) => documentOf(proxied.body),
+    answered: (status) => `That address answered ${status}.`
+  });
 }
 
 /* ==========================================================================
@@ -351,7 +371,6 @@ async function fetchYoutubeVideo(source) {
       transcriptNote = payload.error;
     }
   } catch {
-    transcriptNote = '';
   }
 
   // 2. The caption track of the page itself — the other way in.
@@ -578,18 +597,9 @@ async function buildRedditResult(thread, buildRedditDocument) {
   return {
     markdown,
     title: thread.title || 'Reddit thread',
-    sourceUrl: thread.url || sourceUrlOf(thread),
+    sourceUrl: thread.url || '',
     note: 'thread'
   };
-}
-
-/**
- * The address of a thread that carries none.
- * @param {object} thread
- * @returns {string}
- */
-function sourceUrlOf(thread) {
-  return thread?.url || '';
 }
 
 /**
@@ -787,10 +797,9 @@ async function readResponseBytes(response) {
  * @param {string} url
  * @returns {Promise<{ bytes: Uint8Array, finalUrl: string }>}
  */
-async function fetchBinary(url) {
-  try {
-    const response = await fetch(url, { signal: importSignal() });
-    if (response.ok) {
+function fetchBinary(url) {
+  return fetchWithFallback(url, {
+    direct: async (response) => {
       const type = response.headers.get('content-type') || '';
       if (!/pdf|epub|docx|wordprocessingml|msword|ms-word|octet-stream|zip/i.test(type)) {
         throw new ImportError('That address is not a file of this kind.');
@@ -799,21 +808,16 @@ async function fetchBinary(url) {
         bytes: await readResponseBytes(response),
         finalUrl: response.url || url
       };
-    }
-  } catch (err) {
-    if (err instanceof ImportError || err?.name === 'AbortError') throw err;
-  }
-
-  const proxied = await fetchViaProxy(url);
-  if (proxied.status >= 400) {
-    throw new ImportError(`That address answered ${proxied.status}.`);
-  }
-  if (proxied.encoding !== 'base64') {
-    throw new ImportError('That address is not a file of this kind.');
-  }
-
-  const { fromBase64 } = await import('@/importers/pdf.js');
-  return { bytes: fromBase64(proxied.body), finalUrl: proxied.finalUrl || url };
+    },
+    viaProxy: async (proxied) => {
+      if (proxied.encoding !== 'base64') {
+        throw new ImportError('That address is not a file of this kind.');
+      }
+      const { fromBase64 } = await import('@/importers/pdf.js');
+      return { bytes: fromBase64(proxied.body), finalUrl: proxied.finalUrl || url };
+    },
+    answered: (status) => `That address answered ${status}.`
+  });
 }
 
 /**
@@ -847,7 +851,7 @@ async function fetchPdfDocument(source) {
  * @returns {Promise<{ markdown: string, title: string, sourceUrl: string, note: string }>}
  */
 async function fetchEpubBook(source) {
-  const { epubToMarkdown, buildEpubDocument } = await import('@/importers/epub.js');
+  const { epubToMarkdown } = await import('@/importers/epub.js');
   const { htmlToMarkdownFragment } = await import('@/importers/html.js');
 
   const { bytes, finalUrl } = await fetchBinary(source.url);
@@ -869,7 +873,7 @@ async function fetchEpubBook(source) {
   }
 
   return {
-    markdown: buildEpubDocument(book),
+    markdown: book.markdown,
     title: book.title,
     sourceUrl: finalUrl,
     note: `book (${book.chapters} chapters)`
@@ -1096,56 +1100,21 @@ function fileNameOf(url) {
 }
 
 /**
- * The block of values that may open a Markdown document.
- */
-const FRONTMATTER_RE = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
-
-/**
- * Reads the values a document opens with.
- *
- * A model card often carries a block of its own — `language: en` and the
- * like. It is taken apart and merged into the header of the document
- * instead of being left inside the text, where it would look like a
- * stray line.
- *
- * @param {string} text
- * @returns {{ data: Record<string, string>, body: string }}
- */
-function splitFrontmatter(text) {
-  const source = String(text || '');
-  const match = source.match(FRONTMATTER_RE);
-  if (!match) return { data: {}, body: source };
-
-  const data = {};
-
-  for (const line of match[1].split(/\r?\n/)) {
-    const entry = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
-    if (!entry) continue;
-
-    let value = entry[2].trim();
-    if (value.length > 1) {
-      const first = value[0];
-      const last = value[value.length - 1];
-      if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
-        value = value.slice(1, -1);
-      }
-    }
-
-    data[entry[1].toLowerCase()] = value;
-  }
-
-  return { data, body: source.slice(match[0].length) };
-}
-
-/**
  * The document that is put into the editor: the content with a small header
  * that says where it came from.
+ *
+ * A model card often carries a block of its own — `language: en` and the
+ * like. It is taken apart with the shared parser in core/frontmatter.js and
+ * merged into the header of the document instead of being left inside the
+ * text, where it would look like a stray line.
  *
  * @param {{ markdown: string, title: string, sourceUrl: string }} result
  * @returns {string}
  */
 export function buildDocument(result) {
-  const { data, body } = splitFrontmatter(result.markdown);
+  // The shared parser keeps the line count of the block as empty lines;
+  // the trim below drops them again.
+  const { data, body } = parseFrontmatter(result.markdown);
 
   const title = String(data.title || result.title || '')
     .replace(/\s+/g, ' ')
@@ -1304,19 +1273,16 @@ export async function runImport(input) {
  */
 export function openDialog() {
   if (!el.modalUrlImport) return;
-  el.modalUrlImport.removeAttribute('hidden');
   if (el.urlImportError) el.urlImportError.textContent = '';
-  if (el.urlImportInput) {
-    el.urlImportInput.value = '';
-    el.urlImportInput.focus();
-  }
+  if (el.urlImportInput) el.urlImportInput.value = '';
+  openModal(el.modalUrlImport, { focusTarget: el.urlImportInput });
 }
 
 /**
  * Closes the import dialog.
  */
 export function closeDialog() {
-  el.modalUrlImport?.setAttribute('hidden', '');
+  closeModal(el.modalUrlImport);
 }
 
 /**
@@ -1353,18 +1319,12 @@ export function initUrlImport() {
     closeDialog();
   });
 
-  el.modalUrlImport?.addEventListener('click', (event) => {
-    if (event.target === el.modalUrlImport) closeDialog();
-  });
+  // The open, the close, the backdrop click and the Escape key of the
+  // dialog belong to the shared modal choreography.
+  registerModal(el.modalUrlImport);
 
   el.urlImportForm?.addEventListener('submit', (event) => {
     event.preventDefault();
     runImport(el.urlImportInput.value);
-  });
-
-  window.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && el.modalUrlImport && !el.modalUrlImport.hasAttribute('hidden')) {
-      closeDialog();
-    }
   });
 }

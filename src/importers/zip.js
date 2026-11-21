@@ -8,6 +8,8 @@
  * ============================================================================
  */
 
+import { abortError } from '@/core/schedule.js';
+
 /** The library, loaded once. */
 let fflatePromise = null;
 
@@ -33,9 +35,7 @@ function loadFflate() {
  */
 export async function unzipAsync(bytes, { signal } = {}) {
   if (signal?.aborted) {
-    const error = new Error('The work was stopped.');
-    error.name = 'AbortError';
-    throw error;
+    throw abortError();
   }
 
   const fflate = await loadFflate();
@@ -53,9 +53,7 @@ export async function unzipAsync(bytes, { signal } = {}) {
     };
 
     const onAbort = () => {
-      const error = new Error('The work was stopped.');
-      error.name = 'AbortError';
-      finish(error);
+      finish(abortError());
     };
 
     signal?.addEventListener?.('abort', onAbort, { once: true });

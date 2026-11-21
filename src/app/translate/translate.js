@@ -18,10 +18,10 @@
  */
 
 import { el } from '@/app/shell/dom.js';
-import { applyDocumentPatch, onContentChange, setMarkdown } from '@/app/editor/editor.js';
+import { applyDocumentPatch, lineOffsets, onContentChange, setMarkdown } from '@/app/editor/editor.js';
 import { getSettings, saveSettings } from '@/core/settings.js';
 import { setMessage } from '@/app/shell/status.js';
-import { confirmDialog } from '@/app/shell/dialog.js';
+import { closeModal, confirmDialog, openModal, registerModal } from '@/app/shell/dialog.js';
 import {
   getVisibleSourceRange,
   isPreviewRendering,
@@ -44,6 +44,7 @@ import {
   LARGE_DOC_CHARS,
   TRANSLATE_LOOKAHEAD_LINES,
   TRANSLATE_MAX_UNITS,
+  abortError,
   throwIfAborted,
   yieldToMainThread
 } from '@/core/schedule.js';
@@ -243,9 +244,7 @@ async function requestTranslation(units, target, { signal } = {}) {
     return await requestThroughServer(units, target, { signal });
   } catch (err) {
     if (signal?.aborted) {
-      const aborted = new Error('The work was stopped.');
-      aborted.name = 'AbortError';
-      throw aborted;
+      throw abortError();
     }
     // Only a refusal is worth trying another way. Every other failure
     // would fail the same way again.
@@ -255,9 +254,7 @@ async function requestTranslation(units, target, { signal } = {}) {
       return await translateUnits(units, target, { signal });
     } catch (directError) {
       if (signal?.aborted || directError?.name === 'AbortError') {
-        const aborted = new Error('The work was stopped.');
-        aborted.name = 'AbortError';
-        throw aborted;
+        throw abortError();
       }
       if (directError instanceof TranslateError) {
         // A refusal of the translator stays a refusal — the user has to
@@ -298,9 +295,7 @@ async function requestThroughServer(units, target, { signal } = {}) {
     });
   } catch (err) {
     if (signal?.aborted || err?.name === 'AbortError') {
-      const aborted = new Error('The work was stopped.');
-      aborted.name = 'AbortError';
-      throw aborted;
+      throw abortError();
     }
     throw new TranslationError('The translator could not be reached.');
   }
@@ -424,15 +419,14 @@ export function openDialog() {
     }
   }
 
-  el.modalTranslate.removeAttribute('hidden');
-  el.translateTarget?.focus();
+  openModal(el.modalTranslate, { focusTarget: el.translateTarget });
 }
 
 /**
  * Closes the translation dialog.
  */
 export function closeDialog() {
-  el.modalTranslate?.setAttribute('hidden', '');
+  closeModal(el.modalTranslate);
 }
 
 /**
@@ -495,20 +489,6 @@ function hideProgress() {
  * they are, and the rest of the book is not sent anywhere until it is
  * reached.
  * ========================================================================== */
-
-/**
- * The offsets at which each line starts.
- *
- * @param {string} text
- * @returns {number[]}
- */
-function lineOffsets(text) {
-  const starts = [0];
-  for (let index = 0; index < text.length; index += 1) {
-    if (text[index] === '\n') starts.push(index + 1);
-  }
-  return starts;
-}
 
 /**
  * The source slice for an inclusive line range.
@@ -655,35 +635,93 @@ function visibleTranslationRange(session) {
 }
 
 /**
- * Validates one translated unit before it is put back into the document.
+ * Counts how many pieces each unit was cut into, so that a unit is put
+ * together only once every piece of it has come back.
  *
- * @param {string} text
- * @param {object} unit
- * @param {Map<number, object>} registry
- * @returns {{ text: string, intact: boolean }}
+ * @param {Array<{ pieces: Array<{ unit: number }> }>} requests
+ * @param {number} unitCount
+ * @returns {number[]} one count per unit
  */
-function cleanTranslatedUnit(text, unit, registry) {
-  const singleLine = String(text || '')
-    .replace(/[\r\n]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+function countExpectedPieces(requests, unitCount) {
+  const expectedPieces = new Array(unitCount).fill(0);
+  requests.forEach((request) =>
+    request.pieces.forEach((piece) => {
+      expectedPieces[piece.unit] += 1;
+    })
+  );
+  return expectedPieces;
+}
 
-  if (!singleLine) return { text: unit.original, intact: false };
+/**
+ * Puts the pieces of the translated units back together.
+ *
+ * A unit is whole once all of its pieces are in — not before, so that a
+ * unit that was cut in two does not turn into two units. Before a whole
+ * unit is put back into the document, its structure is checked:
+ *
+ *   • it has to be one line — a newline in a unit would move every
+ *     following anchor of the document;
+ *   • no pipe may be smuggled in that the original did not have — the
+ *     pipe of a table row is structure, and it is put back on its own;
+ *   • every token has to be there, and there once — a token that is gone
+ *     or doubled means the translator damaged the structure.
+ *
+ * A unit that fails any of these falls back to its original text: a
+ * document that is half-translated is better than a document whose code
+ * no longer compiles.
+ *
+ * @param {object} plan the plan of the document being translated
+ * @param {Array<string[]>} pieces the translated pieces, per unit
+ * @param {number[]} expectedPieces how many pieces each unit was cut into
+ * @param {Array<{ text: string, intact: boolean }|null>} answers the answers
+ *   so far; the units that became whole are filled in here
+ * @returns {{ done: number, damaged: number }} how many units became whole,
+ *   and how many of those had to fall back to the original
+ */
+function reassembleUnits(plan, pieces, expectedPieces, answers) {
+  let done = 0;
+  let damaged = 0;
 
-  if (singleLine.includes('|') && !unit.original.includes('|')) {
-    return { text: unit.original, intact: false };
+  for (let unitIndex = 0; unitIndex < plan.units.length; unitIndex += 1) {
+    if (answers[unitIndex] !== null) continue;
+    if (pieces[unitIndex].length < expectedPieces[unitIndex]) continue;
+
+    const unit = plan.units[unitIndex];
+    const joined = pieces[unitIndex].join(' ');
+
+    // The unit is made one line first: a translator that answers with a
+    // line break would move every following anchor of the document.
+    const singleLine = String(joined || '')
+      .replace(/[\r\n]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    // A unit with nothing left in it, a smuggled pipe, or a token that is
+    // gone or doubled has lost its structure — the original text is used.
+    if (
+      !singleLine ||
+      (singleLine.includes('|') && !unit.original.includes('|')) ||
+      !tokensIntact(singleLine, unit.expected)
+    ) {
+      answers[unitIndex] = { text: unit.original, intact: false };
+      damaged += 1;
+    } else {
+      const restored = unmaskText(singleLine, plan.registry);
+
+      // What comes back has to stay one line as well, and it has to say
+      // something: an empty answer is no answer.
+      if (!restored.trim() || /[\r\n]/.test(restored)) {
+        answers[unitIndex] = { text: unit.original, intact: false };
+        damaged += 1;
+      } else {
+        answers[unitIndex] = { text: restored, intact: true };
+      }
+    }
+
+    done += 1;
   }
 
-  if (!tokensIntact(singleLine, unit.expected)) {
-    return { text: unit.original, intact: false };
-  }
-
-  const restored = unmaskText(singleLine, registry);
-  if (!restored.trim() || /[\r\n]/.test(restored)) {
-    return { text: unit.original, intact: false };
-  }
-
-  return { text: restored, intact: true };
+  return { done, damaged };
 }
 
 /**
@@ -729,12 +767,7 @@ async function translateLazySlice(session, slice, startLine, endLine) {
   const requests = planRequests(plan.units.map((unit) => unit.text));
   const answers = new Array(plan.units.length).fill(null);
   const pieces = new Array(plan.units.length).fill(null).map(() => []);
-  const expectedPieces = new Array(plan.units.length).fill(0);
-  requests.forEach((request) =>
-    request.pieces.forEach((piece) => {
-      expectedPieces[piece.unit] += 1;
-    })
-  );
+  const expectedPieces = countExpectedPieces(requests, plan.units.length);
 
   let done = 0;
 
@@ -750,15 +783,8 @@ async function translateLazySlice(session, slice, startLine, endLine) {
       if (typeof text === 'string') pieces[piece.unit].push(text);
     });
 
-    for (let unitIndex = 0; unitIndex < plan.units.length; unitIndex += 1) {
-      if (answers[unitIndex] !== null) continue;
-      if (pieces[unitIndex].length < expectedPieces[unitIndex]) continue;
-
-      const unit = plan.units[unitIndex];
-      const joined = pieces[unitIndex].join(' ');
-      answers[unitIndex] = cleanTranslatedUnit(joined, unit, plan.registry);
-      done += 1;
-    }
+    const reassembled = reassembleUnits(plan, pieces, expectedPieces, answers);
+    done += reassembled.done;
 
     showProgress(done, plan.units.length);
     await yieldToMainThread();
@@ -1203,6 +1229,7 @@ export async function runTranslation() {
   const pieces = new Array(plan.units.length).fill(null).map(() => []);
 
   const requests = planRequests(plan.units.map((unit) => unit.text));
+  const expectedPieces = countExpectedPieces(requests, plan.units.length);
   let done = 0;
   let detected = '';
   let damaged = 0;
@@ -1221,33 +1248,14 @@ export async function runTranslation() {
         if (typeof text === 'string') pieces[piece.unit].push(text);
       });
 
-      // A unit is whole once all of its pieces are in.
-      for (let unit = 0; unit < plan.units.length; unit += 1) {
-        if (answers[unit] !== null) continue;
-
-        const unitPieces = pieces[unit];
-        const expectedPieces = requests
-          .flatMap((entry) => entry.pieces)
-          .filter((piece) => piece.unit === unit).length;
-
-        if (unitPieces.length < expectedPieces) continue;
-
-        const joined = unitPieces.join(' ');
-        const original = plan.units[unit];
-
-        // The structure of the unit has to be intact: every token has to
-        // be there, and it has to be there once. If it is not, the
-        // original text is used — a document that is half-translated is
-        // better than a document whose code no longer compiles.
-        if (!tokensIntact(joined, original.expected)) {
-          damaged += 1;
-          answers[unit] = { text: original.original, intact: false };
-        } else {
-          answers[unit] = { text: unmaskText(joined, plan.registry), intact: true };
-        }
-
-        done += 1;
-      }
+      // A unit is whole once all of its pieces are in — and its structure
+      // has to be intact: every token there once, one line, no smuggled
+      // pipe. A unit that lost its structure keeps its original text — a
+      // document that is half-translated is better than a document whose
+      // code no longer compiles.
+      const reassembled = reassembleUnits(plan, pieces, expectedPieces, answers);
+      done += reassembled.done;
+      damaged += reassembled.damaged;
 
       // The document is written with what has been translated so far.
       // The line endings are kept: a document that came from Windows
@@ -1362,9 +1370,9 @@ export function initTranslate() {
     }
   });
 
-  el.modalTranslate?.addEventListener('click', (event) => {
-    if (event.target === el.modalTranslate) closeDialog();
-  });
+  // The open, the close, the backdrop click and the Escape key of the
+  // dialog belong to the shared modal choreography.
+  registerModal(el.modalTranslate);
 
   el.translateForm?.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -1384,12 +1392,6 @@ export function initTranslate() {
   // reading ends there is no scroll event to wake the session up again.
   onTTSStateChange(({ isPlaying }) => {
     if (!isPlaying && !isNarrationStarting()) scheduleLazyVisible();
-  });
-
-  window.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && el.modalTranslate && !el.modalTranslate.hasAttribute('hidden')) {
-      closeDialog();
-    }
   });
 
   // A new document is not the document the original belonged to. Keeping

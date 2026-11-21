@@ -65,7 +65,7 @@ document.body.innerHTML = `
 `;
 
 const { initShortcuts } = await import('@/app/shell/shortcuts.js');
-const { el } = await import('@/app/shell/dom.js');
+const { closeModal, openModal } = await import('@/app/shell/dialog.js');
 
 /** @param {KeyboardEventInit} init */
 function pressOn(target, init) {
@@ -118,12 +118,15 @@ describe('the new tab shortcut', () => {
   });
 
   it('does nothing while a dialog is open', () => {
-    el.modalSettings = document.createElement('div');
+    // A modal the shared registry knows about: while it is open, the
+    // shortcut waits.
+    const modal = document.createElement('div');
+    openModal(modal);
 
     press({ key: 'n', ctrlKey: true, altKey: true, bubbles: true });
 
     expect(window.open).not.toHaveBeenCalled();
-    delete el.modalSettings;
+    closeModal(modal);
   });
 });
 

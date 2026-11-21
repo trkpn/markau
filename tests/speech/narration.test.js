@@ -9,13 +9,16 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 
-const { ensureTokens, setPreviewContainer, markTokensStale } = await import('@/speech/tts.js');
+const { prepareSpeechWindow, setPreviewContainer, markTokensStale } = await import(
+  '@/speech/tts.js'
+);
 
 /**
- * Builds a preview with a transcript in it and tokenizes it.
+ * Builds a preview with a transcript in it and tokenizes it through the
+ * windowed pass the narrator itself uses.
  *
  * @param {string} html
- * @returns {{ tokens: Array<{ text: string }>, preview: HTMLElement }}
+ * @returns {{ tokens: Array<{ text: string, element: Element }>, preview: HTMLElement }}
  */
 function tokenize(html) {
   const preview = document.createElement('div');
@@ -24,8 +27,18 @@ function tokenize(html) {
 
   setPreviewContainer(preview);
   markTokensStale('test');
+  prepareSpeechWindow();
 
-  return { tokens: ensureTokens(), preview };
+  // The windowed pass leaves its tokens behind as wrappers in the preview;
+  // mirror the token table from the DOM it wrapped. A formula keeps the
+  // single token whose text is the formula, not the KaTeX markup.
+  const tokens = Array.from(preview.querySelectorAll('.tts-word')).map((el) =>
+    el.classList.contains('tts-math-token')
+      ? { text: el.getAttribute('data-formula') || 'formula', element: el }
+      : { text: el.textContent, element: el }
+  );
+
+  return { tokens, preview };
 }
 
 /**

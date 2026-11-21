@@ -874,13 +874,3 @@ export async function docxToMarkdown(bytes, { url = '', onProgress, signal } = {
     paragraphs: blocks.length
   };
 }
-
-/**
- * Builds the document of a Word file.
- *
- * @param {{ markdown: string }} docx
- * @returns {string}
- */
-export function buildDocxDocument(docx) {
-  return docx.markdown;
-}

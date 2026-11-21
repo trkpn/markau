@@ -14,12 +14,6 @@
 /** A document above this size gets the lazy, time-sliced treatment. */
 export const LARGE_DOC_CHARS = 120_000;
 
-/** Above this size the one-time Markdown parse is moved off the main thread. */
-export const HUGE_DOC_CHARS = 3_000_000;
-
-/** How much rendered HTML one preview slice may produce. */
-export const RENDER_CHUNK_CHARS = 32_000;
-
 /** How much speech text one narrator window should cover. */
 export const TTS_WINDOW_CHARS = 6_000;
 
@@ -36,9 +30,6 @@ export const TRANSLATE_LOOKAHEAD_LINES = 160;
 
 /** The most translation units one lazy round may carry. */
 export const TRANSLATE_MAX_UNITS = 80;
-
-/** How long a slice may run before it must yield, in milliseconds. */
-export const SLICE_BUDGET_MS = 8;
 
 /**
  * Returns the browser's scheduler when it has one.
@@ -77,30 +68,15 @@ export function yieldToMainThread(priority = 'user-visible') {
 }
 
 /**
- * Waits for idle time, with a bounded fallback.
+ * Builds the error a stopped job reports: a plain `Error` named
+ * `AbortError`, the way `AbortController` signals name their failures.
  *
- * @param {number} [timeout]
- * @returns {Promise<void>}
+ * @returns {Error}
  */
-export function yieldToIdle(timeout = 1000) {
-  if (typeof requestIdleCallback === 'function') {
-    return new Promise((resolve) => {
-      requestIdleCallback(() => resolve(), { timeout });
-    });
-  }
-
-  return new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-/**
- * Tells whether a slice has used its time budget.
- *
- * @param {number} started when the slice started, from `performance.now()`
- * @param {number} [budget]
- * @returns {boolean}
- */
-export function shouldYield(started, budget = SLICE_BUDGET_MS) {
-  return performance.now() - started >= budget;
+export function abortError() {
+  const error = new Error('The work was stopped.');
+  error.name = 'AbortError';
+  return error;
 }
 
 /**
@@ -110,9 +86,7 @@ export function shouldYield(started, budget = SLICE_BUDGET_MS) {
  */
 export function throwIfAborted(signal) {
   if (signal?.aborted) {
-    const error = new Error('The work was stopped.');
-    error.name = 'AbortError';
-    throw error;
+    throw abortError();
   }
 }
 

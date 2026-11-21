@@ -80,9 +80,8 @@ function startListening({ onResult, onError } = {}) {
 
   const SpeechRecognitionConstructor = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-  // Persist in module scope and window object
+  // Persist in module scope
   recognitionInstance = new SpeechRecognitionConstructor();
-  window.__currentSTTRecognition = recognitionInstance;
 
   recognitionInstance.continuous = true;
   recognitionInstance.interimResults = true;
@@ -146,7 +145,6 @@ function stopListening() {
       // Ignore if already stopped
     }
     recognitionInstance = null;
-    window.__currentSTTRecognition = null;
   }
   isListening = false;
   notifyState({ isListening: false });

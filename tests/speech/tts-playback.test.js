@@ -95,7 +95,7 @@ function loadDocument(text) {
 
   tts.setPreviewContainer(preview);
   tts.markTokensStale('test');
-  tts.ensureTokens();
+  tts.prepareSpeechWindow();
 }
 
 /**
@@ -209,7 +209,7 @@ describe('narration that the browser drops', () => {
     expect(tts.isSpeaking()).toBe(false);
   });
 
-  it('asks again for a chunk the engine failed on', async () => {
+  it('never repeats a chunk the listener has heard — it skips ahead instead', async () => {
     loadDocument(SENTENCES.join(' '));
 
     await startReading();
@@ -219,9 +219,26 @@ describe('narration that the browser drops', () => {
 
     await vi.advanceTimersByTimeAsync(400);
 
+    const texts = fakeSpeech.spoken.map((utterance) => utterance.text);
+    // The sentence was voiced once; the reading moved on to the next one
+    // instead of saying it again.
+    expect(texts.filter((text) => text === first.text).length).toBe(1);
+    expect(texts.some((text) => text !== first.text)).toBe(true);
+    expect(tts.isSpeaking()).toBe(true);
+  });
+
+  it('asks again for a chunk the engine refused before it started', async () => {
+    loadDocument(SENTENCES.join(' '));
+
+    await startReading();
+    const first = fakeSpeech.spoken[0];
+    // No `onstart` ever fired: nothing was voiced, so asking again is silent.
+    first.onerror({ error: 'network' });
+
+    await vi.advanceTimersByTimeAsync(400);
+
     const retry = fakeSpeech.spoken.filter((utterance) => utterance.text === first.text);
     expect(retry.length).toBe(2);
-    expect(tts.isSpeaking()).toBe(true);
   });
 
   it('skips a chunk that keeps failing and reads the rest', async () => {
@@ -238,7 +255,7 @@ describe('narration that the browser drops', () => {
       if (!attempt) break;
 
       used.add(attempt);
-      attempt.onstart();
+      // No `onstart`: the engine keeps refusing the request before voicing it.
       attempt.onerror({ error: 'synthesis-failed' });
       await vi.advanceTimersByTimeAsync(500);
     }
@@ -304,18 +321,19 @@ describe('narration that the browser drops', () => {
     const first = fakeSpeech.spoken[0];
     const queued = fakeSpeech.spoken[1];
 
-    first.onstart();
+    // The engine refused the request before voicing it, so it is re-requested;
+    // the re-request cancels the request queued behind it.
     first.onerror({ error: 'network' });
     await vi.advanceTimersByTimeAsync(500);
 
-    // The queued request was cancelled when the failed chunk was re-requested;
-    // a late start/end from it must not be counted as a spoken chunk.
+    // A late start/end from the cancelled request must not be counted as a
+    // spoken chunk.
     const before = fakeSpeech.spoken.length;
     queued.onstart();
     queued.onend();
 
     expect(fakeSpeech.spoken.length).toBe(before);
-    expect(tts.isSpeaking()).toBe(true);
+    expect(tts.isSpeaking()).toBe(false);
   });
 
   it('recovers when the engine reports speaking but has gone silent', async () => {
@@ -599,7 +617,7 @@ describe('windowed tokenization', () => {
 
     tts.setPreviewContainer(preview);
     tts.markTokensStale('test');
-    tts.ensureTokens();
+    tts.prepareSpeechWindow();
 
     const label = preview.querySelector('svg text');
     expect(label.querySelector('tspan.tts-word')).not.toBeNull();

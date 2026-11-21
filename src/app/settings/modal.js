@@ -34,7 +34,7 @@ import { setSplitAxis, setRatio, resetLayoutSizes, getRatio } from '@/app/shell/
 import { refreshPreview } from '@/app/preview/preview.js';
 import { setMarkdown } from '@/app/editor/editor.js';
 import { setMessage } from '@/app/shell/status.js';
-import { confirmDialog } from '@/app/shell/dialog.js';
+import { closeModal, confirmDialog, openModal, registerModal } from '@/app/shell/dialog.js';
 import { loadAllLanguages } from '@/markdown/parser.js';
 import { defaultMarkdown } from '@/content/sample.js';
 import { TARGET_LANGUAGES, DEFAULT_TARGET } from '@/translation/languages.js';
@@ -256,26 +256,19 @@ export function initSettingsModal() {
     }))
   );
 
-  let lastFocused = null;
-
   const open = () => {
-    lastFocused = document.activeElement;
     syncInputs();
-    el.modalSettings.removeAttribute('hidden');
-    updateScrollHint();
-    startScrollPolling();
-    // Move focus into the dialog so keyboard and screen-reader users are not
-    // left behind on the page behind the modal.
-    el.btnCloseSettings?.focus();
+    openModal(el.modalSettings, {
+      focusTarget: el.btnCloseSettings,
+      onOpen: () => {
+        updateScrollHint();
+        startScrollPolling();
+      }
+    });
   };
 
   const close = () => {
-    el.modalSettings.setAttribute('hidden', '');
-    stopScrollPolling();
-    // Give the focus back to wherever it came from.
-    const target = lastFocused && document.contains(lastFocused) ? lastFocused : el.btnSettings;
-    if (target && typeof target.focus === 'function') target.focus();
-    lastFocused = null;
+    closeModal(el.modalSettings);
   };
 
   closePreferences = close;
@@ -283,8 +276,13 @@ export function initSettingsModal() {
   el.btnSettings?.addEventListener('click', open);
   el.btnCloseSettings?.addEventListener('click', close);
 
-  el.modalSettings?.addEventListener('click', (event) => {
-    if (event.target === el.modalSettings) close();
+  // The close, the backdrop click and the Escape key belong to the shared
+  // modal choreography. The focus goes back to wherever it came from, and
+  // the scroll hint stops polling once the dialog is gone.
+  registerModal(el.modalSettings, {
+    getRestoreTarget: (previousFocus) =>
+      previousFocus && document.contains(previousFocus) ? previousFocus : el.btnSettings,
+    onClose: stopScrollPolling
   });
 
   // Keep the keyboard focus inside the dialog while it is open.
@@ -306,12 +304,6 @@ export function initSettingsModal() {
     } else if (!event.shiftKey && document.activeElement === last) {
       event.preventDefault();
       first.focus();
-    }
-  });
-
-  window.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && !el.modalSettings.hasAttribute('hidden')) {
-      close();
     }
   });
 

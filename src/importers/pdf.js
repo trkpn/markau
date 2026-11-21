@@ -54,14 +54,13 @@ function loadPdfjs() {
  * @param {Uint8Array} bytes
  * @param {object} [options]
  * @param {string} [options.url] where the PDF came from
- * @param {number} [options.maxPages] how many pages to read
  * @param {(progress: { phase: string, done: number, total: number }) => void} [options.onProgress]
  * @param {AbortSignal} [options.signal]
  * @returns {Promise<{ markdown: string, title: string, pages: number }>}
  */
 export async function pdfToMarkdown(
   bytes,
-  { url = '', maxPages = 0, onProgress, signal } = {}
+  { url = '', onProgress, signal } = {}
 ) {
   throwIfAborted(signal);
   reportProgress(onProgress, { phase: 'reading', done: 0, total: 1 });
@@ -73,18 +72,16 @@ export async function pdfToMarkdown(
 
   try {
     const pages = document.numPages;
-    const limit = maxPages > 0 ? Math.min(pages, maxPages) : pages;
 
     const info = await document.getMetadata().catch(() => null);
     const title =
       (info?.info?.Title || '').trim() || (info?.metadata?.title || '').trim() || nameFromUrl(url);
 
     const lines = [];
-    const texts = [];
 
-    reportProgress(onProgress, { phase: 'extracting', done: 0, total: limit });
+    reportProgress(onProgress, { phase: 'extracting', done: 0, total: pages });
 
-    for (let page = 1; page <= limit; page += 1) {
+    for (let page = 1; page <= pages; page += 1) {
       throwIfAborted(signal);
 
       const one = await document.getPage(page);
@@ -96,10 +93,9 @@ export async function pdfToMarkdown(
         .replace(/\s+/g, ' ')
         .trim();
 
-      if (text) texts.push(text);
       lines.push(`## Page ${page}`, '', text, '');
 
-      reportProgress(onProgress, { phase: 'extracting', done: page, total: limit });
+      reportProgress(onProgress, { phase: 'extracting', done: page, total: pages });
     }
 
     throwIfAborted(signal);

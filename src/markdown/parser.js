@@ -885,19 +885,6 @@ export function renderMarkdownGroup(group, env = {}) {
 }
 
 /**
- * Renders a whole document from an already-parsed token list.
- *
- * @param {object[]} tokens
- * @param {object} [env={}]
- * @returns {string}
- */
-export function renderMarkdownTokens(tokens, env = {}) {
-  if (!tokens || tokens.length === 0) return '';
-  const rawHtml = md.renderer.render(tokens, md.options, env);
-  return DOMPurify.sanitize(rawHtml, DOMPURIFY_CONFIG);
-}
-
-/**
  * Converts markdown raw string to sanitized HTML
  *
  * The front matter is taken out first: it is metadata, not content, and it

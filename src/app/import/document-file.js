@@ -9,6 +9,8 @@
  * ============================================================================
  */
 
+import { abortError } from '@/core/schedule.js';
+
 /**
  * Tells whether a file is a document the app can read — a PDF, a book in
  * EPUB form or a Word document.
@@ -48,9 +50,7 @@ async function readFileBytes(file, { onProgress, signal } = {}) {
 
   while (true) {
     if (signal?.aborted) {
-      const error = new Error('The work was stopped.');
-      error.name = 'AbortError';
-      throw error;
+      throw abortError();
     }
 
     const { done, value } = await reader.read();
@@ -85,9 +85,7 @@ export async function readDocumentFile(file, { onProgress, signal } = {}) {
   const type = String(file.type || '').toLowerCase();
 
   if (signal?.aborted) {
-    const error = new Error('The work was stopped.');
-    error.name = 'AbortError';
-    throw error;
+    throw abortError();
   }
 
   if (/\.pdf$/i.test(name) || type === 'application/pdf') {
