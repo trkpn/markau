@@ -34,3 +34,7 @@ dist-ssr/
 # ZCode session artifacts
 .zcode/
 .wrangler/
+
+# Harness machine-local
+.harness/runtime/
+.harness/scripts/__pycache__/

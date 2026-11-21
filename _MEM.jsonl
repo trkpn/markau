@@ -1,0 +1,1 @@
+{"timestamp": "2026-11-21T07:39:27Z", "kind": "gotcha", "note": "When deleting an export, also grep the module-local constants it used: removing schedule.js shouldYield orphaned its own SLICE_BUDGET_MS constant; caught at VERIFY.", "source": "TASK-001 VERIFY"}
