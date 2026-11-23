@@ -488,7 +488,11 @@ function bindDiagram(block, bindFunctions) {
  * @param {HTMLElement[]|null} [onlyBlocks]
  * @returns {Promise<void>}
  */
-export async function renderMermaidDiagrams(root, onlyBlocks = null) {
+export async function renderMermaidDiagrams(
+  root,
+  onlyBlocks = null,
+  { theme = resolveTheme(), force = false } = {}
+) {
   if (!root) return;
 
   activeRoot = root;
@@ -497,8 +501,6 @@ export async function renderMermaidDiagrams(root, onlyBlocks = null) {
     ? onlyBlocks.filter((block) => block?.classList?.contains('mermaid-block'))
     : Array.from(root.querySelectorAll(BLOCK_SELECTOR));
   if (blocks.length === 0) return;
-
-  const theme = resolveTheme();
 
   let mermaid;
   try {
@@ -514,6 +516,9 @@ export async function renderMermaidDiagrams(root, onlyBlocks = null) {
   for (let index = 0; index < blocks.length; index++) {
     const block = blocks[index];
     if (!block.isConnected) continue;
+    if (force) {
+      block.dataset.mermaidState = '';
+    }
     if (
       block.dataset.mermaidState === 'rendered' ||
       block.dataset.mermaidState === 'error' ||
@@ -524,6 +529,27 @@ export async function renderMermaidDiagrams(root, onlyBlocks = null) {
     block.dataset.mermaidState = 'pending';
     await renderBlock(mermaid, block, index, theme);
   }
+}
+
+/**
+ * Ensures all Mermaid diagrams in `root` are rendered in the ink-friendly
+ * light theme before printing, and returns a cleanup callback that restores
+ * the active theme afterwards.
+ * @param {HTMLElement|null} root
+ * @returns {Promise<() => void>}
+ */
+export async function prepareMermaidForPrint(root) {
+  if (!root || !root.querySelector(BLOCK_SELECTOR)) {
+    return () => {};
+  }
+
+  const wasDark = resolveTheme() === 'dark';
+  await renderMermaidDiagrams(root, null, { theme: 'default', force: wasDark });
+
+  return () => {
+    if (!wasDark || !root.isConnected) return;
+    renderMermaidDiagrams(root, null, { theme: resolveTheme(), force: true });
+  };
 }
 
 /**

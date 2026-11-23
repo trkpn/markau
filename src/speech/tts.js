@@ -57,6 +57,8 @@ let isPlaying = false;
 let isPaused = false;
 /** True between the Play press and the moment the engine actually starts. */
 let isStarting = false;
+/** True only when this tab paused its own utterance and still holds it in the engine. */
+let ownsPausedUtterance = false;
 let currentWordIndex = -1;
 
 // Token index and speech text
@@ -1453,6 +1455,7 @@ function speakChunk(chunk, index, sessionId) {
     isPlaying = true;
     isPaused = false;
     isStarting = false;
+    ownsPausedUtterance = false;
     noteProgress();
     // Real progress: the engine voiced a chunk. The restart budget is back.
     restartAttempts = 0;
@@ -1486,6 +1489,7 @@ function speakChunk(chunk, index, sessionId) {
   utterance.onend = () => {
     if (sessionId !== currentSessionId || utterance.__canceled) return;
     liveUtterances.delete(utterance);
+    if (liveUtterances.size === 0) ownsPausedUtterance = false;
     // Chunks finish in order; an `onend` from a chunk that was cancelled and
     // handed over again must not count as progress.
     chunkDone = Math.max(chunkDone, index + 1);
@@ -1506,6 +1510,7 @@ function speakChunk(chunk, index, sessionId) {
   utterance.onerror = (event) => {
     if (sessionId !== currentSessionId || utterance.__canceled) return;
     liveUtterances.delete(utterance);
+    if (liveUtterances.size === 0) ownsPausedUtterance = false;
     // A request that failed is over; anything the browser reports for it
     // afterwards is stale and must not move the reading forward.
     utterance.__canceled = true;
@@ -1524,8 +1529,8 @@ function speakChunk(chunk, index, sessionId) {
       if (isPlaying && !isStarting) {
         // The browser's speech synthesis engine was taken over or interrupted
         // mid-playback by another feature or tab (e.g. Edge browser's native Read Aloud).
-        // Pause MarkAu gracefully instead of retrying and conflicting with it.
-        pause();
+        // Pause MarkAu locally without calling speechSynthesis.pause() on the new speaker.
+        pauseLocally();
       } else {
         // Interrupted during initial start/buffer drain (e.g. async cancel collision in Chromium).
         // Retry from this chunk so the reader is not stuck in a disabled "starting" state.
@@ -1650,6 +1655,7 @@ function finishPlayback() {
   isPlaying = false;
   isPaused = false;
   isStarting = false;
+  ownsPausedUtterance = false;
   restartAttempts = 0;
   lastProgressAt = 0;
   clearStartWatchdog();
@@ -1698,12 +1704,13 @@ function speakFromWord(wordIndex = 0) {
   const thisSession = currentSessionId;
 
   isStarting = true;
+  ownsPausedUtterance = false;
   notifyState({ starting: true });
 
   teardownSession();
   noteProgress();
-  // The cross-tab hand-shake is optional.
-  if (getSettings().pauseOtherTabs) announceNarrationStart();
+  // Always announce so any paused or cooperating tab releases its queue ownership.
+  announceNarrationStart();
 
   if (window.speechSynthesis.speaking || window.speechSynthesis.pending || window.speechSynthesis.paused) {
     safeCancelSpeech();
@@ -1744,17 +1751,19 @@ function speakFromWord(wordIndex = 0) {
 export function play() {
   if (!('speechSynthesis' in window)) return false;
 
+  const wasPaused = isPaused;
+
   // Resuming a pause does not need the token table: the engine is still
   // holding the utterance. Re-tokenizing here would move the words under the
   // running audio.
   if (isPaused) {
     const api = window.speechSynthesis;
-    // The paused utterance may have been dropped by the browser — only trust
-    // the API when it really is still holding the speech.
-    if (api.paused) {
-      // Taking the reading back means the other tab has to let go, when the
-      // reader asked for the cross-tab hand-shake.
-      if (getSettings().pauseOtherTabs) announceNarrationStart();
+    // The paused utterance may have been dropped or replaced by another tab —
+    // only resume when this tab still owns the paused utterance in the engine.
+    if (ownsPausedUtterance && api.paused) {
+      // Taking the reading back means any other tab must release its queue state.
+      announceNarrationStart();
+      ownsPausedUtterance = false;
       api.resume();
       noteProgress();
       isPaused = false;
@@ -1764,6 +1773,7 @@ export function play() {
       return true;
     }
     // Otherwise fall through and re-speak from the current word.
+    ownsPausedUtterance = false;
     isPaused = false;
   }
 
@@ -1790,13 +1800,11 @@ export function play() {
     return false;
   }
 
-  if (isPlaying) {
+  if (isPlaying && !wasPaused) {
     const api = window.speechSynthesis;
-    // The engine believes it is reading. If the API agrees, there is
-    // nothing to do; if it does not, the utterance was dropped without an
-    // event — heal it instead of leaving a silent "playing" state that only
-    // a second press can shake off.
-    if (api.speaking || api.pending) {
+    // The engine believes it is reading. If we still have a live utterance and
+    // the API agrees, there is nothing to do; otherwise re-speak from currentWordIndex.
+    if (liveUtterances.size > 0 && (api.speaking || api.pending)) {
       isStarting = false;
       notifyState({ starting: false });
       return true;
@@ -1818,29 +1826,70 @@ export function pause() {
   if (!('speechSynthesis' in window)) return;
   if (isPlaying && !isPaused) {
     window.speechSynthesis.pause();
+    ownsPausedUtterance = liveUtterances.size > 0;
     isPaused = true;
     notifyState({ isPlaying: true, isPaused: true });
   }
 }
 
 /**
- * Pauses because another tab started narrating. The place in the document
- * is kept: the reader can press Play again in this tab to take over.
+ * Pauses this tab's local narration state without calling `window.speechSynthesis.pause()`,
+ * so another tab or external Read Aloud taking over the global engine is not paused.
+ * @param {string} [reason]
  */
-function pauseForOtherTab() {
-  // The hand-shake is opt-in: without the setting, another tab starting to
-  // read does not pause this one.
-  if (getSettings().pauseOtherTabs !== true) return;
-  if (!isPlaying || isPaused) return;
-
-  // Another tab has taken over narration. Clean up our active utterances and
-  // timers so this tab does not fight over the browser's audio queue or re-pump chunks.
+function pauseLocally(reason) {
+  currentSessionId++;
+  for (const utterance of liveUtterances) utterance.__canceled = true;
   teardownSession();
   clearStartWatchdog();
-
-  window.speechSynthesis.pause();
+  ownsPausedUtterance = false;
   isPaused = true;
-  notifyState({ isPlaying: true, isPaused: true, reason: 'other-tab' });
+  isStarting = false;
+  notifyState(
+    reason
+      ? { isPlaying: true, isPaused: true, starting: false, reason }
+      : { isPlaying: true, isPaused: true, starting: false }
+  );
+}
+
+/**
+ * Releases this tab's paused utterance from the global speech queue (e.g. when
+ * switching away to another tab) while keeping `isPaused` and `currentWordIndex`
+ * so the reader can resume from the same spot later.
+ */
+function releasePausedUtterance() {
+  if (!ownsPausedUtterance) return;
+  ownsPausedUtterance = false;
+  currentSessionId++;
+  cancelEngine();
+  teardownSession();
+  clearStartWatchdog();
+}
+
+/**
+ * Pauses or releases queue ownership because another tab started narrating.
+ * The place in the document is kept: the reader can press Play again in this
+ * tab to take over.
+ */
+function pauseForOtherTab() {
+  // If this tab was already paused, another tab taking over the global engine
+  // invalidates our paused utterance. Drop ownership locally without touching
+  // window.speechSynthesis so the other tab is never interrupted.
+  if (isPaused) {
+    ownsPausedUtterance = false;
+    currentSessionId++;
+    for (const utterance of liveUtterances) utterance.__canceled = true;
+    teardownSession();
+    clearStartWatchdog();
+    return;
+  }
+
+  // The hand-shake is opt-in: without the setting, another tab starting to
+  // read does not pause an actively playing tab.
+  if (getSettings().pauseOtherTabs !== true) return;
+  if (!isPlaying) return;
+
+  pauseLocally('other-tab');
 }
 
 /**
@@ -1849,16 +1898,20 @@ function pauseForOtherTab() {
  */
 export function stop(reason = 'user') {
   if (!('speechSynthesis' in window)) return;
+  const hadSession =
+    isPlaying || isPaused || isStarting || liveUtterances.size > 0 || ownsPausedUtterance;
   currentSessionId++;
   tokensAreStale = true;
   hasMoreSpeech = false;
+  ownsPausedUtterance = false;
   teardownSession();
   clearStartWatchdog();
-  safeCancelSpeech();
+  if (hadSession) safeCancelSpeech();
   setActiveWord(-1);
   isPlaying = false;
   isPaused = false;
   isStarting = false;
+  ownsPausedUtterance = false;
   restartAttempts = 0;
   notifyState({
     isPlaying: false,
@@ -1997,8 +2050,9 @@ export function reconcileWithSpeechApi() {
 
   // The engine can be paused behind our back (a tab switch, an audio device
   // change): a session that looks like it is playing would otherwise stay
-  // silent until the user presses Play again.
-  if (api.paused && !isPaused && !document.hidden) {
+  // silent until the user presses Play again. Only resume if this tab still
+  // has a live utterance in the engine.
+  if (api.paused && !isPaused && !document.hidden && liveUtterances.size > 0) {
     api.resume();
     noteProgress();
   }
@@ -2006,11 +2060,10 @@ export function reconcileWithSpeechApi() {
   // The engine reports activity — the reading is alive, whatever the
   // boundary events are doing. Some voices never fire them at all.
   if (api.speaking || api.pending) {
-    // If the browser reports activity but we have no active utterances of our own,
-    // and MarkAu has no remaining chunks or pending pumps, that speech belongs
-    // to Edge browser's native Read Aloud or another tab.
-    if (liveUtterances.size === 0 && chunkDone >= chunkQueue.length && !pumpTimer) {
-      pause();
+    // If the browser reports activity but we have no active utterances of our own
+    // and no pending pump/launch, that speech belongs to another tab or external Read Aloud.
+    if (liveUtterances.size === 0 && pumpTimer === null && speakDebounceTimer === null) {
+      pauseLocally();
       return;
     }
 
@@ -2077,7 +2130,11 @@ export function initPlaybackWatchdog() {
   watchdogTimer = setInterval(reconcileWithSpeechApi, 1000);
 
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
+    if (document.hidden) {
+      if (isPaused && ownsPausedUtterance) {
+        releasePausedUtterance();
+      }
+    } else if (document.visibilityState === 'visible') {
       reconcileWithSpeechApi();
     }
   });

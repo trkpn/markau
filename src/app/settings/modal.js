@@ -26,6 +26,7 @@ import {
   HIGHLIGHT_MODE_OPTIONS,
   AUTO_SAVE_OPTIONS,
   SAVE_FORMAT_OPTIONS,
+  PRINT_ORIENTATION_OPTIONS,
   LINE_HEIGHT_OPTIONS,
   HISTORY_LIMIT_OPTIONS,
   HISTORY_DELAY_OPTIONS
@@ -130,6 +131,9 @@ function syncInputs() {
   el.selectSyncMode.value = settings.syncMode;
   el.selectSpeechChunk.value = settings.speechChunk;
   el.selectSaveFormat.value = settings.saveFormat;
+  if (el.selectPrintOrientation) {
+    el.selectPrintOrientation.value = settings.printOrientation || 'portrait';
+  }
   el.selectAutoSave.value = String(settings.autoSaveSeconds);
   el.selectHighlightMode.value = settings.highlightMode;
   el.selectTheme.value = settings.theme;
@@ -243,6 +247,7 @@ export function initSettingsModal() {
   fillOptions(el.selectHighlightMode, HIGHLIGHT_MODE_OPTIONS);
   fillOptions(el.selectAutoSave, AUTO_SAVE_OPTIONS);
   fillOptions(el.selectSaveFormat, SAVE_FORMAT_OPTIONS);
+  fillOptions(el.selectPrintOrientation, PRINT_ORIENTATION_OPTIONS);
   fillOptions(el.selectLineHeight, LINE_HEIGHT_OPTIONS);
   fillOptions(el.selectHistoryLimit, HISTORY_LIMIT_OPTIONS);
   fillOptions(el.selectHistoryDelay, HISTORY_DELAY_OPTIONS);
@@ -346,6 +351,9 @@ export function initSettingsModal() {
   // Files
   el.selectSaveFormat?.addEventListener('change', () =>
     saveSettings({ saveFormat: el.selectSaveFormat.value })
+  );
+  el.selectPrintOrientation?.addEventListener('change', () =>
+    saveSettings({ printOrientation: el.selectPrintOrientation.value })
   );
   el.selectAutoSave?.addEventListener('change', () => {
     saveSettings({ autoSaveSeconds: Number.parseInt(el.selectAutoSave.value, 10) || 0 });

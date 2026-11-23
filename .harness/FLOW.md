@@ -11,5 +11,5 @@ Execute-only fast track for clear, low-risk incremental dev (routed upfront by A
 1. Work: Minimal surgical edit (keep comments/docstrings).
 2. Verify & Snapshot: Run AGENTS.md verify (exit 0; UI edits: inspect visual tool if present) and capture evidence via `python .harness/scripts/snapshot.py capture --track FLOW --cmd "<verify_cmd>" --exit <code>` (.harness/runtime/snapshots/FLOW_<seq>.md).
 3. 2-Strike: 2 consecutive fails: halt, revert owned AI edits (keep user diffs), report failure.
-4. Reply: <= 3 lines ([FLOW] <change> | Verify: exit 0 | Snapshot: .harness/runtime/snapshots/FLOW_<seq>.md).
-5. Close (FLOW.md --done | pre-commit batch): Final verify exit 0, review pending .harness/runtime/snapshots/*.md, append batched DONE line to _LOG.jsonl (track:FLOW), clean verified snapshots (`python .harness/scripts/snapshot.py clean --track FLOW`), append _MEM.jsonl only if new rule/gotcha learned. Decoupled from git commit.
+4. Reply: <= 3 lines ([FLOW] <change> | Verify: exit 0 | Snapshot: .harness/runtime/snapshots/FLOW_<seq>.md | Next: continue or `FLOW.md --done`).
+5. Close (`FLOW.md --done` | pre-commit): Verify exit 0, review snapshots, log DONE to _LOG.jsonl (track:FLOW), clean (`python .harness/scripts/snapshot.py clean --track FLOW`), log _MEM.jsonl if new gotcha. No auto-commit; end `Next:` (`FLOW.md` / `PLAN.md` or commit).

@@ -1,1 +1,2 @@
 {"timestamp": "2026-11-21T07:39:27Z", "track": "STAGE", "task": "TASK-001", "exit": 0, "status": "DONE", "note": "T01-T09 verified: 3-pass audit PASS; 2 nits fixed post-audit (SLICE_BUDGET_MS dead export, fetchBinary direct-success test); check 541/541, build 0"}
+{"timestamp":"2026-11-23T11:36:41+07:00","track":"STAGE","task":"BUG-001","exit":0,"status":"DONE","note":"Isolate per-tab speechSynthesis ownership (ownsPausedUtterance, visibilitychange release, local pause on interrupt/watchdog/other-tab, idle stop guard, TAB_ID filter); npm run check 547/547 + build ok"}

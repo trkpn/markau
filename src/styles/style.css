@@ -2487,7 +2487,8 @@
   }
 
   @page {
-    margin: 18mm 16mm;
+    size: A4;
+    margin: 16mm 15mm;
   }
 
   :root,
@@ -2556,8 +2557,63 @@
   .preview-container {
     max-width: none !important;
     padding: 0 !important;
-    font-size: 11pt;
+    font-size: 10.5pt;
+    line-height: 1.5;
     color: #171a21;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  /* Compact vertical rhythm on paper so headings, paragraphs, tables and
+     diagrams pack cleanly onto A4 without leaving large empty gaps. */
+  .preview-container h1,
+  .preview-container h2,
+  .preview-container h3,
+  .preview-container h4,
+  .preview-container h5,
+  .preview-container h6 {
+    margin-top: 0.95rem;
+    margin-bottom: 0.4rem;
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  .preview-container h1 {
+    margin-top: 0.2rem;
+    padding-bottom: 0.25rem;
+  }
+
+  .preview-container h2 {
+    padding-bottom: 0.2rem;
+  }
+
+  .preview-container p,
+  .preview-container ul,
+  .preview-container ol {
+    margin-bottom: 0.55rem;
+  }
+
+  .preview-container li {
+    margin-bottom: 0.15rem;
+  }
+
+  .preview-container hr {
+    margin: 0.85rem 0;
+  }
+
+  .preview-container table,
+  .code-block,
+  .callout,
+  .katex-block,
+  .mermaid-block,
+  .preview-container blockquote {
+    margin: 0.7rem 0;
+  }
+
+  .preview-container p,
+  .preview-container li {
+    orphans: 3;
+    widows: 3;
   }
 
   /* The tools of a diagram are for the screen, not for the paper. */
@@ -2568,17 +2624,106 @@
     display: none !important;
   }
 
-  .mermaid-block,
-  .callout,
-  .code-block,
-  .mermaid-source {
-    break-inside: avoid;
+  /* Wrap long code lines so they never clip past the right edge of A4,
+     and allow long code blocks to break across pages instead of clipping. */
+  .preview-container pre.hljs,
+  .code-gutter {
+    font-size: 8.5pt;
+    line-height: 1.45;
   }
 
-  .preview-container h1,
-  .preview-container h2,
-  .preview-container h3 {
+  .preview-container pre.hljs {
+    white-space: pre-wrap !important;
+    overflow-wrap: anywhere !important;
+    word-break: break-word;
+    overflow-x: visible !important;
+  }
+
+  .code-head {
     break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  /* Repeat table headers across pages and keep rows intact. */
+  .preview-container table {
+    font-size: 9pt;
+  }
+
+  .preview-container thead {
+    display: table-header-group;
+  }
+
+  .preview-container tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .preview-container th,
+  .preview-container td {
+    padding: 0.4rem 0.6rem;
+    overflow-wrap: anywhere;
+  }
+
+  /* Keep images and figures within A4 page bounds (~half-page cap in
+     portrait so large figures don't push half a page to blank). */
+  .preview-container img {
+    max-width: 100% !important;
+    max-height: 125mm !important;
+    width: auto;
+    height: auto !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .preview-container figure {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* Reset interactive Mermaid viewport/zoom and cap diagram height to ~45%
+     of A4 portrait height so two diagrams or a diagram + prose fit per page. */
+  .mermaid-block {
+    padding: 0.55rem 0.7rem;
+  }
+
+  .mermaid-caption {
+    margin-bottom: 0.35rem;
+  }
+
+  .mermaid-viewport {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .mermaid-canvas {
+    justify-content: center !important;
+  }
+
+  .mermaid-canvas svg {
+    max-width: 100% !important;
+    width: auto !important;
+    max-height: 122mm !important;
+    height: auto !important;
+  }
+
+  [data-print-orientation='landscape'] .mermaid-canvas svg,
+  [data-print-orientation='landscape'] .preview-container img {
+    max-height: 145mm !important;
+  }
+
+  .katex-block,
+  .katex-display {
+    overflow-x: visible !important;
+    overflow-y: visible !important;
+  }
+
+  .mermaid-block,
+  .callout,
+  .katex-block,
+  .mermaid-source,
+  .preview-container blockquote {
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
 
   .preview-container a {
@@ -2587,6 +2732,8 @@
   }
 
   .footnotes {
-    break-before: page;
+    margin-top: 2rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--ma-border);
   }
 }

@@ -94,6 +94,7 @@ export const el = {
   selectSpeechChunk: document.getElementById('select-speech-chunk'),
   settingsVoiceSelect: document.getElementById('settings-voice-select'),
   selectSaveFormat: document.getElementById('select-save-format'),
+  selectPrintOrientation: document.getElementById('select-print-orientation'),
   selectAutoSave: document.getElementById('select-auto-save'),
   selectHighlightMode: document.getElementById('select-highlight-mode'),
   selectTheme: document.getElementById('select-theme'),

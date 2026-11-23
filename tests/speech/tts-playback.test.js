@@ -833,3 +833,135 @@ describe('chunking and speech engine resilience', () => {
     expect(cancelSpy).toHaveBeenCalled();
   });
 });
+
+describe('multi-tab and external speech isolation', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    document.body.innerHTML = '';
+    fakeSpeech.spoken = [];
+    fakeSpeech.speaking = false;
+    fakeSpeech.pending = false;
+    fakeSpeech.paused = false;
+    tts.setDocumentLocale('en-US');
+    saveSettings({ pauseOtherTabs: false, readDiagramLabels: false });
+  });
+
+  afterEach(() => {
+    tts.stop();
+    saveSettings({ pauseOtherTabs: false, readDiagramLabels: false });
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('re-speaks own document instead of resuming another tab when another tab started while paused', async () => {
+    loadDocument(SENTENCES.join(' '));
+    await startReading();
+    fakeSpeech.spoken[0].onstart();
+
+    tts.pause();
+    expect(tts.isSpeechPaused()).toBe(true);
+
+    // Another tab starts reading (even with pauseOtherTabs: false) and later pauses.
+    window.dispatchEvent(
+      new StorageEvent('storage', {
+        key: 'markau_narration_ping',
+        newValue: String(Date.now())
+      })
+    );
+    fakeSpeech.paused = true;
+
+    const cancelSpy = vi.spyOn(fakeSpeech, 'cancel');
+    const spokenBefore = fakeSpeech.spoken.length;
+
+    tts.play();
+    await vi.advanceTimersByTimeAsync(60);
+
+    expect(cancelSpy).toHaveBeenCalled();
+    expect(fakeSpeech.spoken.length).toBeGreaterThan(spokenBefore);
+    expect(tts.isSpeechPaused()).toBe(false);
+  });
+
+  it('does not pause the global speechSynthesis engine when yielding to another tab', async () => {
+    saveSettings({ pauseOtherTabs: true });
+    loadDocument(SENTENCES.join(' '));
+    await startReading();
+    fakeSpeech.spoken[0].onstart();
+
+    const pauseSpy = vi.spyOn(fakeSpeech, 'pause');
+
+    window.dispatchEvent(
+      new StorageEvent('storage', {
+        key: 'markau_narration_ping',
+        newValue: String(Date.now())
+      })
+    );
+
+    expect(tts.isSpeechPaused()).toBe(true);
+    expect(pauseSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not pause the global speechSynthesis engine when interrupted by external speech', async () => {
+    loadDocument(SENTENCES.join(' '));
+    await startReading();
+    const utterance = fakeSpeech.spoken[0];
+    utterance.onstart();
+
+    const pauseSpy = vi.spyOn(fakeSpeech, 'pause');
+
+    utterance.onerror({ error: 'interrupted' });
+
+    expect(tts.isSpeechPaused()).toBe(true);
+    expect(pauseSpy).not.toHaveBeenCalled();
+  });
+
+  it('yields locally in watchdog when external speech is active and this tab has no live utterances', async () => {
+    loadDocument(SENTENCES.join(' '));
+    await startReading();
+    const utterance = fakeSpeech.spoken[0];
+    utterance.onstart();
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Simulate another tab canceling all of this tab's utterances and taking over the engine.
+    for (const u of fakeSpeech.spoken) {
+      u.onerror?.({ error: 'canceled' });
+    }
+    fakeSpeech.speaking = true;
+    fakeSpeech.pending = false;
+
+    const spokenBefore = fakeSpeech.spoken.length;
+    tts.reconcileWithSpeechApi();
+    await vi.advanceTimersByTimeAsync(60);
+
+    expect(tts.isSpeechPaused()).toBe(true);
+    expect(fakeSpeech.spoken.length).toBe(spokenBefore);
+  });
+
+  it('does not cancel the global speechSynthesis engine when stop() is called on an idle tab', () => {
+    fakeSpeech.speaking = true;
+    const cancelSpy = vi.spyOn(fakeSpeech, 'cancel');
+
+    tts.stop();
+
+    expect(cancelSpy).not.toHaveBeenCalled();
+  });
+
+  it('releases paused utterance from the global queue when the tab becomes hidden', async () => {
+    tts.initPlaybackWatchdog();
+    loadDocument(SENTENCES.join(' '));
+    await startReading();
+    fakeSpeech.spoken[0].onstart();
+
+    tts.pause();
+    expect(fakeSpeech.paused).toBe(true);
+
+    const cancelSpy = vi.spyOn(fakeSpeech, 'cancel');
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    expect(cancelSpy).toHaveBeenCalled();
+    expect(tts.isSpeechPaused()).toBe(true);
+
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+  });
+});

@@ -13,9 +13,9 @@ Execute on-demand via `INTENT.md [transcript or brief]` (bind strictly to input 
 2. Confirmation Gate (Zero-Speculation):
    - Present Understanding Echo in chat before proceeding.
    - If ambiguous or distorted: HALT IMMEDIATELY. Invoke native question tool if available, or ask in plain text. Never guess.
-   - Advance only upon explicit user confirmation (`OK`, `Yes`, or corrections).
+   - Advance only upon explicit user confirmation (`OK`, `Yes`, or corrections; halt with `Next:` — `OK` to confirm, or reply corrections).
 3. Boundaries: Define core problem, measurable KPI, and non-goals (Anti-Scope / YAGNI).
-4. Output & Hand-Off: Map affected domains (`DATA`, `API`, `UI`, `SEC`, `OPS`) and emit `INTAKE CONTRACT` only. Hand back to `AGENTS.md` Auto-Route (never route tracks or write `_ACTIVE.md` directly).
+4. Output & Hand-Off: Map affected domains (`DATA`, `API`, `UI`, `SEC`, `OPS`) and emit `INTAKE CONTRACT` only. Hand back to `AGENTS.md` Auto-Route (never route tracks or write `_ACTIVE.md` directly), ending with `Next:` — `PLAN.md` (complex/gated) or `FLOW.md` (clear, local, low-risk).
 
 ## 2. Ingestion Schema (Echo)
 ```text

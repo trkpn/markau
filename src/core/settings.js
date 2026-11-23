@@ -116,6 +116,11 @@ export const SAVE_FORMAT_OPTIONS = [
   { value: 'html', label: 'HTML (.html)' }
 ];
 
+export const PRINT_ORIENTATION_OPTIONS = [
+  { value: 'portrait', label: 'A4 Portrait' },
+  { value: 'landscape', label: 'A4 Landscape' }
+];
+
 export const LINE_HEIGHT_OPTIONS = [
   { value: '1.5', label: '1.5 Compact' },
   { value: '1.75', label: '1.75 Comfortable' },
@@ -152,6 +157,7 @@ export const SPEECH_CHUNK_MODES = values(SPEECH_CHUNK_OPTIONS);
 export const HIGHLIGHT_MODES = values(HIGHLIGHT_MODE_OPTIONS);
 export const AUTO_SAVE_SECONDS = values(AUTO_SAVE_OPTIONS);
 export const SAVE_FORMATS = values(SAVE_FORMAT_OPTIONS);
+export const PRINT_ORIENTATIONS = values(PRINT_ORIENTATION_OPTIONS);
 export const HISTORY_LIMITS = values(HISTORY_LIMIT_OPTIONS);
 export const HISTORY_DELAYS = values(HISTORY_DELAY_OPTIONS);
 
@@ -191,6 +197,7 @@ export const DEFAULT_SETTINGS = {
   highlightMode: 'common',
   autoSaveSeconds: 3,
   saveFormat: 'md',
+  printOrientation: 'portrait',
   rememberPosition: true,
   // Import from a URL: the fallback reader hands the address to a third
   // party, so it can be switched off.
@@ -280,6 +287,7 @@ export function sanitizeSettings(raw) {
     highlightMode: oneOf(source.highlightMode, HIGHLIGHT_MODES, d.highlightMode),
     autoSaveSeconds: oneOf(source.autoSaveSeconds, AUTO_SAVE_SECONDS, d.autoSaveSeconds),
     saveFormat: oneOf(source.saveFormat, SAVE_FORMATS, d.saveFormat),
+    printOrientation: oneOf(source.printOrientation, PRINT_ORIENTATIONS, d.printOrientation),
     rememberPosition: bool(source.rememberPosition, d.rememberPosition),
     readerFallback: bool(source.readerFallback, d.readerFallback),
     readerApiKey:

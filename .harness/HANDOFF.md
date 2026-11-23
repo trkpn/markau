@@ -4,7 +4,7 @@ RULES (`.harness/LAW.md`):
 Immutable: Never edit `.harness/HANDOFF.md`. Write ephemeral snapshots strictly to `.harness/runtime/_HANDOFF.md` (gitignored; copy Sections 0-5 if absent). Decoupled from `_ACTIVE.md` and `.harness/runtime/_SPAWN.md` (never used for `FLOW.md`). Applies to `STAGE` and `ASK` sessions.
 
 Protocol (Valid for `HANDOFF.md` or `_HANDOFF.md`):
-- Save (`--save`, or bare in active chat when capturing context): Summarize Intent, Agreed/Discarded Decisions, Touchpoints, Nuances, and Immediate Next Direction, then write/overwrite `.harness/runtime/_HANDOFF.md`.
+- Save (`--save`, or bare in active chat when capturing context): Summarize Intent, Agreed/Discarded Decisions, Touchpoints, Nuances, and Immediate Next Direction, write/overwrite `.harness/runtime/_HANDOFF.md`, and halt with `Next:` — open New session -> `HANDOFF.md --resume`.
 - Resume (`--resume`, or bare `HANDOFF.md` / `_HANDOFF.md` when loading snapshot): Read `.harness/runtime/_HANDOFF.md` read-only, absorb context, `Active Track`, and `Conversation Mode` without re-reading raw history, and continue immediately. Never clear/delete `.harness/runtime/_HANDOFF.md` on read and never write `_LOG.jsonl` (safe for concurrent Coding Agents).
 
 ## 0. Transfer Metadata

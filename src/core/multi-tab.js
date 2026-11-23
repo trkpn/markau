@@ -14,6 +14,8 @@
 
 const CHANNEL_NAME = 'markau-narration';
 const PING_KEY = 'markau_narration_ping';
+/** Unique identifier for this tab so it can ignore its own broadcasts. */
+const TAB_ID = `tab-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 /** How long a new tab waits to hear that another tab is already open. */
 const PROBE_TIMEOUT_MS = 150;
 
@@ -41,7 +43,7 @@ function getChannel() {
 export function announceNarrationStart() {
   const bus = getChannel();
   if (bus) {
-    bus.postMessage({ type: 'narration-start', at: Date.now() });
+    bus.postMessage({ type: 'narration-start', from: TAB_ID, at: Date.now() });
     return;
   }
 
@@ -63,7 +65,7 @@ export function onOtherTabNarrationStart(fn) {
 
   if (bus) {
     const handler = (event) => {
-      if (event.data?.type === 'narration-start') fn();
+      if (event.data?.type === 'narration-start' && event.data?.from !== TAB_ID) fn();
     };
     bus.addEventListener('message', handler);
     return () => bus.removeEventListener('message', handler);
