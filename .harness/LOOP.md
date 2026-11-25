@@ -11,7 +11,7 @@ Execute .harness/BOOT.md.
 
 ## Loop B: Bugfix & Incident
 P0 Outage: Instant Rollback in .harness/baselines/_OPS.md <= 60s first, then steps 1-2.
-1. RCA (PLAN): Trace failure, query _*.jsonl via Search Tool (complex -> AUDIT.md or ORACLE.md; if graphify-out/graph.json exists -> `graphify path`). Draft Root Cause + Minimal Fix in _ACTIVE.md (PLAN).
+1. RCA (PLAN): Trace failure, query _*.jsonl via Search Tool (complex -> AUDIT.md; if graphify-out/graph.json exists -> `graphify path`). Draft Root Cause + Minimal Fix in _ACTIVE.md (PLAN).
 2. Red-Green-Verify (BUILD->VERIFY): Failing Red test -> minimal structural Green fix -> full AGENTS.md verify & snapshot; append _MEM.jsonl (Loop E) if reusable rule.
 
 ## Loop C: Safe Refactoring

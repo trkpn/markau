@@ -19,8 +19,8 @@ Execution Flow (Inside `STAGE` `BUILD`):
    - Concurrency / Rate-Limit: Not a `Strike`. Drain active wave, halve cap (`N -> max(1, N // 2)`), resume interrupted slices (`1` = sequential main loop).
    - `BLOCK` -> halt dispatch (never auto-retry), record `Expected vs Reality` in Section 3 (`LOCK`), halt, report to Founder.
    - `FAIL` (`exit != 0` in `Target` & Strike `< 2`, max 1 retry) -> `Strike + 1`, dispatch 1 corrective Work Order.
-   - `2-Strike` -> revert owned AI edits (keep user diffs), record Section 3 (`LOCK`), run `.harness/AUDIT.md` or `.harness/ORACLE.md`, halt.
-6. Verify & Hand Back to `STAGE` (`VERIFY`): Inspect isolated `git diff -- <Target>` + Worker `OBSERVATION`s into Section 2, run `AGENTS.md` verify commands (`exit 0`), and capture snapshot via `python .harness/scripts/snapshot.py capture --track STAGE --tag <Task> --exit 0` (`.harness/runtime/snapshots/`). Mark completed steps `[x]` in `_ACTIVE.md`, clear `.harness/runtime/_SPAWN.md`, transition `_ACTIVE.md` to `VERIFY`, and halt with `Next:` — `VERIFY.md` (New session, Builder != Verifier) (single unified Gate 2 & `_LOG.jsonl` closure in `STAGE.md`).
+   - `2-Strike` -> revert owned AI edits (keep user diffs), record Section 3 (`LOCK`), run `.harness/AUDIT.md`, halt.
+6. Verify & Hand Back to `STAGE` (`VERIFY`): Inspect isolated `git diff -- <Target>` + Worker `OBSERVATION`s into Section 2, run `AGENTS.md` verify commands (`exit 0`), and capture snapshot via `python .harness/scripts/snapshot.py capture --track STAGE --tag <Task> --exit 0` (`.harness/runtime/snapshots/`). Mark completed steps `[x]` in `_ACTIVE.md`, clear `.harness/runtime/_SPAWN.md`, transition `_ACTIVE.md` to `VERIFY`, and halt with `Next:` — `VERIFY.md` (New or Resume Verifier session, Builder != Verifier) (single unified Gate 2 & `_LOG.jsonl` closure in `STAGE.md`).
 
 Flags (`SPAWN.md` or `.harness/runtime/_SPAWN.md`):
 - `--workers N`: Override `SPAWN_MAX_WORKERS` for this batch (`1` forces sequential main-loop execution).

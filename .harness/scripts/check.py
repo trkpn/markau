@@ -73,26 +73,32 @@ def _run_checker(cmd: list[str], cwd: Path, timeout: int = 6) -> tuple[int, str]
     return proc.returncode, combined
 
 
-def _find_nearest_parent(start: Path, root: Path, filename: str) -> Path | None:
-    cur = start.parent.resolve()
-    root_res = root.resolve()
+def _walk_up_to_root(start_dir: Path, root: Path | None = None):
+    cur = start_dir.resolve()
+    stop_at = root.resolve() if root is not None else cur
+    if cur != stop_at and stop_at not in cur.parents:
+        stop_at = cur
     while True:
-        if (cur / filename).is_file():
-            return cur
-        if cur == root_res or cur.parent == cur:
-            return None
+        yield cur
+        if cur == stop_at or cur.parent == cur:
+            break
         cur = cur.parent
 
 
-def _find_local_bin(project_dir: Path, name: str) -> str | None:
+def _find_nearest_parent(start: Path, root: Path, filename: str) -> Path | None:
+    return next((d for d in _walk_up_to_root(start.parent, root) if (d / filename).is_file()), None)
+
+
+def _find_local_bin(project_dir: Path, name: str, root: Path | None = None) -> str | None:
+    """Locate a Node binary in project_dir/node_modules/.bin, walking up to root for hoisted monorepos."""
     suffixes = (".cmd", ".exe", "") if os.name == "nt" else ("",)
-    bin_dir = project_dir / "node_modules" / ".bin"
-    if not bin_dir.is_dir():
-        return None
-    for suf in suffixes:
-        cand = bin_dir / f"{name}{suf}"
-        if cand.is_file():
-            return str(cand)
+    for cur in _walk_up_to_root(project_dir, root):
+        bin_dir = cur / "node_modules" / ".bin"
+        if bin_dir.is_dir():
+            for suf in suffixes:
+                cand = bin_dir / f"{name}{suf}"
+                if cand.is_file():
+                    return str(cand)
     return None
 
 
@@ -138,8 +144,7 @@ def _check_js_ts(root: Path, fp: Path, ext: str, timeout: int) -> tuple[list[str
     biome = shutil.which("biome")
     if not biome:
         pkg_dir = _find_nearest_parent(fp, root, "package.json")
-        if pkg_dir:
-            biome = _find_local_bin(pkg_dir, "biome")
+        biome = _find_local_bin(pkg_dir or root, "biome", root=root)
     if biome:
         checkers.append("biome")
         rc, out = _run_checker([biome, "check", "--colors=off", str(fp)], root, timeout)
@@ -160,7 +165,7 @@ def _check_js_ts(root: Path, fp: Path, ext: str, timeout: int) -> tuple[list[str
     if ext in (".ts", ".tsx", ".mts", ".cts") and not errors:
         ts_dir = _find_nearest_parent(fp, root, "tsconfig.json")
         if ts_dir:
-            tsc = _find_local_bin(ts_dir, "tsc")
+            tsc = _find_local_bin(ts_dir, "tsc", root=root)
             if tsc:
                 checkers.append("tsc")
                 rc, out = _run_checker([tsc, "--noEmit", "--pretty", "false"], ts_dir, timeout=max(timeout, 8))

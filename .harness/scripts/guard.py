@@ -214,7 +214,7 @@ def scan_git_diff_secrets(root: Path) -> dict[str, Any]:
 
     # Also scan untracked text files (small files only, skip secret/binary/runtime paths)
     for item in git_status_all(root):
-        if item.get("code") != "??":
+        if item.get("status") != "??":
             continue
         rel = item["path"]
         if rel.startswith((".harness/runtime/", "graphify-out/")) or _is_secret_path(rel):
@@ -248,6 +248,16 @@ FLOW_RISK_FILES = {
     "package.json",
     "package-lock.json",
     "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "yarn.lock",
+    "bun.lock",
+    "bun.lockb",
+    "turbo.json",
+    "nx.json",
+    "project.json",
+    "justfile",
+    "mise.toml",
+    ".mise.toml",
     "pyproject.toml",
     "uv.lock",
     "composer.json",
@@ -525,7 +535,7 @@ def run_verify_guard(
     if require_snapshot:
         if not snaps:
             violations.append(f"Missing snapshot in .harness/runtime/snapshots/ for {task}")
-        elif any("- Exit Code: 0" not in p.read_text(encoding="utf-8", errors="replace") for p in snaps):
+        elif not any("- Exit Code: 0" in p.read_text(encoding="utf-8", errors="replace") for p in snaps):
             violations.append("Snapshot has non-zero Exit Code")
 
     return {

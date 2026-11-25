@@ -38,3 +38,5 @@ dist-ssr/
 # Harness machine-local
 .harness/runtime/
 .harness/scripts/__pycache__/
+
+src/core/build-info.js

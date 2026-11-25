@@ -11,7 +11,7 @@ Protocol (Valid for `HANDOFF.md` or `_HANDOFF.md`):
 - Timestamp: `<YYYY-MM-DD HH:MM>`
 - Source Session / Tool: `<Antigravity | Claude Code | ZCode | OpenCode | Codex | DeepSeek Harness | Other>`
 - Active Track: `<STAGE | ASK>`
-- Conversation Mode: `<ASK / Q&A | Oracley / Planning | Code Implementation | Debugging>`
+- Conversation Mode: `<ASK / Q&A | Advisory / Planning | Code Implementation | Debugging>`
 
 ## 1. Core Topic & Context Intent
 - Central Theme: `<What this discussion/session is fundamentally about>`

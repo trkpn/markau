@@ -13,7 +13,7 @@ Never hardcode host tool names; resolve each capability from host tool schema or
    - File: CLI `fd` if recorded; else host file discovery.
    - Search: CLI `rg <pattern> <path>` if recorded; else host search.
 3. Shared Governance CLI (.harness/scripts/):
-   - `guard.py` (policy, verify & `--event secrets`), `check.py` (single-file lint/type), `repomap.py` (symbol map), `snapshot.py` (evidence), `ledger.py` (_LOG/_MEM.jsonl with redaction), `verify_ui.py` (browser verify), `notify.py` (gate alerts), `oracle.py` (masked consult).
+   - `guard.py` (policy, verify & `--event secrets`), `check.py` (single-file lint/type), `repomap.py` (symbol map), `snapshot.py` (evidence), `ledger.py` (_LOG/_MEM.jsonl with redaction), `verify_ui.py` (browser verify), `notify.py` (gate alerts).
 
 ## 2. Deterministic Policy Engine (.harness/scripts/guard.py)
 SSOT enforcing .harness/LAW.md invariants across hooks and post-facto checks:

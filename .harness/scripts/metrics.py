@@ -35,7 +35,7 @@ def compute_metrics(root: Path) -> dict[str, Any]:
             except Exception:
                 pass
 
-    bf = root / ".harness" / "runtime" / "oracle_thread.json"
+    bf = root / ".harness" / "runtime" / "advisor_thread.json"
     if bf.exists():
         try:
             bd = json.loads(bf.read_text(encoding="utf-8"))

@@ -9,17 +9,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
-TEMPLATES_DIR = REPO_ROOT / "templates"
-
 RO_FILES = {
     "SYSTEM.md",
     "FLOW.md",
     "PLAN.md",
     "BUILD.md",
     "VERIFY.md",
-    "ORACLE.md",
+    "ADVISOR.md",
     "STAGE.md",
     "INTENT.md",
     "LAW.md",
@@ -37,8 +33,13 @@ SKIP_DIRS = {
     ".venv",
     "venv",
     ".harness",
+    ".turbo",
+    ".nx",
+    ".mise",
     "dist",
     "build",
+    "out",
+    "coverage",
     ".next",
     "target",
     "vendor",
@@ -67,24 +68,27 @@ def run_git(cwd: Path, *args: str, timeout: int = 5) -> tuple[int, str, str]:
 
 
 def discover_git_roots(root: Path) -> list[Path]:
-    """Return [root] if root is a git repo, else 1st/2nd-level child git repos (Polyrepo / Virtual Monorepo)."""
+    """Return [root] (plus any 1st/2nd-level child git repos) for Single Repo, Monorepo, or Polyrepo."""
     resolved = root.resolve()
-    if (resolved / ".git").exists():
-        return [resolved]
-    found: list[Path] = []
+    found: list[Path] = [resolved] if (resolved / ".git").exists() else []
     try:
-        for child in sorted(resolved.iterdir(), key=lambda p: p.name.lower()):
-            if not child.is_dir() or child.name.startswith(".") or child.name in SKIP_DIRS:
-                continue
-            if (child / ".git").exists():
-                found.append(child)
-                continue
-            for sub in sorted(child.iterdir(), key=lambda p: p.name.lower()):
-                if sub.is_dir() and not sub.name.startswith(".") and sub.name not in SKIP_DIRS:
-                    if (sub / ".git").exists():
-                        found.append(sub)
+        children = sorted(resolved.iterdir(), key=lambda p: p.name.lower())
     except OSError:
-        pass
+        return found
+    for child in children:
+        if not child.is_dir() or child.name.startswith(".") or child.name in SKIP_DIRS:
+            continue
+        if (child / ".git").exists():
+            found.append(child)
+            continue
+        try:
+            subs = sorted(child.iterdir(), key=lambda p: p.name.lower())
+        except OSError:
+            continue
+        for sub in subs:
+            if sub.is_dir() and not sub.name.startswith(".") and sub.name not in SKIP_DIRS:
+                if (sub / ".git").exists():
+                    found.append(sub)
     return found
 
 
@@ -92,9 +96,13 @@ def git_status_all(root: Path) -> list[dict[str, str]]:
     """Aggregate git status --porcelain across Single Repo, Monorepo, or Polyrepo."""
     resolved = root.resolve()
     git_roots = discover_git_roots(resolved)
+    child_roots = {gr.relative_to(resolved).as_posix() for gr in git_roots if gr != resolved}
     files: list[dict[str, str]] = []
+    dirty_children: set[str] = set()
+    root_child_entries: list[dict[str, str]] = []
     for gr in git_roots:
-        prefix = "" if gr == resolved else f"{gr.relative_to(resolved).as_posix()}/"
+        rel_root = "" if gr == resolved else gr.relative_to(resolved).as_posix()
+        prefix = f"{rel_root}/" if rel_root else ""
         rc, out, _ = run_git(gr, "status", "--porcelain", "-uall")
         if rc != 0:
             continue
@@ -102,8 +110,19 @@ def git_status_all(root: Path) -> list[dict[str, str]]:
             if len(ln) >= 4:
                 xy = ln[:2].strip() or ln[:2]
                 rel = ln[3:].split(" -> ")[-1].strip().strip('"').replace("\\", "/")
-                if rel:
-                    files.append({"status": xy, "path": f"{prefix}{rel}"})
+                if not rel:
+                    continue
+                clean_rel = rel.rstrip("/")
+                if not prefix and clean_rel in child_roots:
+                    if xy != "??":
+                        root_child_entries.append({"status": xy, "path": clean_rel})
+                    continue
+                if rel_root:
+                    dirty_children.add(rel_root)
+                files.append({"status": xy, "path": f"{prefix}{rel}"})
+    for entry in root_child_entries:
+        if entry["path"] not in dirty_children:
+            files.append(entry)
     return files
 
 
@@ -314,24 +333,6 @@ def extract_task_contract(root: Path, task_id: str | None = None) -> dict[str, A
         "command": command,
         "steps": steps,
     }
-
-
-def validate_task_spec(root: Path, task_id: str | None = None) -> dict[str, Any]:
-    """Validate the 5-point measurable spec completeness for an active/pending task in _ACTIVE.md."""
-    c = extract_task_contract(root, task_id=task_id)
-    missing: list[str] = []
-    concrete_targets = [t for t in c["targets"] if t not in ("", ".", "-", "*")]
-    if not concrete_targets:
-        missing.append("Target")
-    if not c["symbols"]:
-        missing.append("Symbols")
-    if not c["contract"]:
-        missing.append("Contract")
-    if not c["steps"]:
-        missing.append("Steps")
-    if not c["command"]:
-        missing.append("Command")
-    return {"ok": len(missing) == 0, "missing": missing, "task": c["task"]}
 
 
 def is_path_within_contract(

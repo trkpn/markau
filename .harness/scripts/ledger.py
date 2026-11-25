@@ -77,7 +77,10 @@ def promote_gotchas(root: Path, min_occurrences: int = 2, max_rules: int = 15) -
     if promoted and active.exists():
         txt = active.read_text(encoding="utf-8", errors="replace")
         line = "Rules: " + " | ".join(promoted)
-        updated = re.sub(r"^Rules:\s*.*$", line, txt, count=1, flags=re.MULTILINE) if "Rules:" in txt else f"{txt.rstrip()}\n{line}\n"
+        if re.search(r"^Rules:\s*.*$", txt, flags=re.MULTILINE):
+            updated = re.sub(r"^Rules:\s*.*$", lambda _m: line, txt, count=1, flags=re.MULTILINE)
+        else:
+            updated = f"{txt.rstrip()}\n{line}\n"
         active.write_text(updated, encoding="utf-8")
     return promoted
 
